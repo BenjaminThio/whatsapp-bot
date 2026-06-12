@@ -34,3 +34,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 auth_info_baileys
+
+serviceAccountKey.json
+
+enwiktionary-latest-pages-articles.xml
+dict.dat
+dict.idx
+
+modules
