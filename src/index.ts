@@ -14,6 +14,7 @@ import { loadCommands, findCommand } from "./loader.js";
 import { processMediaDownload } from "./commands/play.js";
 import { startBirthdayScheduler } from "./commands/birthday.js";
 import { activeSearches, savedPollMessages } from "./memory.js";
+import { startScheduleService } from "./commands/schedule.js";
 
 async function startBot() {
     await loadCommands();
@@ -73,6 +74,7 @@ async function startBot() {
         } else if (connection === "open") {
             console.log("🟢 Bot is online and ready!");
             startBirthdayScheduler(sock);
+            startScheduleService(sock);
         }
     });
 

@@ -272,7 +272,7 @@ function computeOutputName(source: MediaSource, targetExt: string): string {
     return `${source.kind}_${stamp}.${targetExt}`;
 }
 
-/** Base name without extension, for use in folder names inside ZIPs. */
+// Base name without extension, for use in folder names inside ZIPs.
 function computeBaseName(source: MediaSource): string {
     if (source.originalName) return path.parse(source.originalName).name;
     return source.kind;

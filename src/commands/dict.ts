@@ -4,6 +4,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { Command } from "./_types.js";
 import { generateSpeech } from "../lib/tts.js";
+import { extractLanguages, gttsCodeForLanguage } from "../lib/langmap.js";
 
 const DICT_EXE = path.join(
     import.meta.dir, "../../dict",
@@ -12,13 +13,13 @@ const DICT_EXE = path.join(
 const DICT_DIR = path.join(import.meta.dir, "../../dict");
 
 const QUERY_TIMEOUT_MS = 30_000;
-
-// WhatsApp text-message cap is ~4096 chars; leave headroom for our header.
 const TEXT_MAX = 3800;
 
-// Dictionary pronunciation is always English - Wiktionary is an English-language
-// dictionary, so reading "love" in the user's !lang voice would be confusing.
-const DICT_PRONOUNCE_LANG = "en";
+/*
+Max number of per-language pronunciations to send for one word. A word like
+"love" exists in 20+ languages; sending 20 audio clips would be spam.
+*/
+const MAX_PRONUNCIATIONS = 4;
 
 // Worker management
 interface PendingQuery {
@@ -76,7 +77,7 @@ function parseBuffer(): void {
 
         const q = queue.shift();
         if (!q) {
-            console.error(`📖 Orphan response received (${status}, ${len} bytes) - discarding`);
+            console.error(`📖 Orphan response received (${status}, ${len} bytes) — discarding`);
             continue;
         }
 
@@ -129,23 +130,17 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
     });
 
     worker = w;
-
-    // Cache warmup
     sendRaw("the").catch(() => { /* swallow warmup failures */ });
-
     return w;
 }
 
 function sendRaw(word: string): Promise<string | null> {
     return new Promise((resolve, reject) => {
         const w = ensureWorker();
-
         const timer = setTimeout(() => {
             killWorker(`query timed out after ${QUERY_TIMEOUT_MS / 1000}s`);
         }, QUERY_TIMEOUT_MS);
-
         queue.push({ resolve, reject, timer });
-
         const clean = word.replace(/[\r\n]+/g, " ").trim();
         w.stdin.write(Buffer.from(clean + "\n", "utf8"));
     });
@@ -161,6 +156,34 @@ async function lookup(word: string): Promise<string | null> {
         }
         throw err;
     }
+}
+
+// Pronunciation planning
+interface PronunciationPlan {
+    langName: string;   // Wiktionary display name, e.g. "French"
+    gttsCode: string;   // gTTS code, e.g. "fr"
+}
+
+/*
+From the definition text, work out which languages to pronounce and in what
+voice. Reads the `=== Language ===` headers, maps each to a gTTS code, drops
+unsupported languages and duplicate voices, and caps the count.
+*/
+function planPronunciations(definition: string): PronunciationPlan[] {
+    const langs = extractLanguages(definition);
+    const plans: PronunciationPlan[] = [];
+    const seenCodes = new Set<string>();
+
+    for (const langName of langs) {
+        const code = gttsCodeForLanguage(langName);
+        if (!code) continue;                 // gTTS can't speak this language
+        if (seenCodes.has(code)) continue;   // e.g. Bokmål + Nynorsk both => "no"
+        seenCodes.add(code);
+        plans.push({ langName, gttsCode: code });
+        if (plans.length >= MAX_PRONUNCIATIONS) break;
+    }
+
+    return plans;
 }
 
 // Handler
@@ -180,7 +203,7 @@ async function handleDict(sock: any, msg: WAMessage, text: string) {
     try {
         await sock.sendMessage(msg.key.remoteJid, { react: { text: "📖", key: msg.key } });
 
-        // Look up the word
+        // 1. Look up the word
         const definition = await lookup(word);
         if (!definition) {
             await sock.sendMessage(msg.key.remoteJid, {
@@ -189,36 +212,44 @@ async function handleDict(sock: any, msg: WAMessage, text: string) {
             return;
         }
 
-        // Generate pronunciation audio (just the headword, like real dictionaries)
-        let audioBuffer: Buffer | null = null;
-        try {
-            audioBuffer = await generateSpeech(word, DICT_PRONOUNCE_LANG);
-        } catch (ttsErr: any) {
-            console.error("📖 TTS failed, continuing without audio:", ttsErr?.message || ttsErr);
-        }
-
-        // Build the definition text, truncated if needed
+        // 2. Send the definition text first
         const formatted = `📖 *${word}*\n\n${definition.trim()}`;
         const definitionText = formatted.length > TEXT_MAX
             ? formatted.slice(0, TEXT_MAX - 30) + "\n\n... _(truncated)_"
             : formatted;
-
+        await sock.sendMessage(msg.key.remoteJid, { text: definitionText }, { quoted: msg });
         /*
-        Send audio first (so it appears immediately above the definition),
-        then send the definition as a separate text message. WhatsApp's        
-        audio captions don't render reliably across clients, so two messages
-        is the only way to guarantee both are visible.
+        3. Figure out which languages to pronounce, based on the definition's
+            own language sections - not the user's !lang setting.
         */
-        if (audioBuffer) {
-            await sock.sendMessage(msg.key.remoteJid, {
-                audio: audioBuffer,
-                mimetype: "audio/mpeg",
-            }, { quoted: msg });
+        const plans = planPronunciations(definition);
+
+        if (plans.length === 0) {
+            // No gTTS-supported language found among the sections - skip audio silently
+            console.log(`📖 No pronounceable language for "${word}"`);
+            return;
         }
 
-        await sock.sendMessage(msg.key.remoteJid, {
-            text: definitionText,
-        }, { quoted: msg });
+        // 4. Generate and send one labeled pronunciation per language
+        for (const plan of plans) {
+            try {
+                const audio = await generateSpeech(word, plan.gttsCode);
+                await sock.sendMessage(msg.key.remoteJid, {
+                    audio,
+                    mimetype: "audio/mpeg",
+                }, { quoted: msg });
+                /*
+                Label which language this pronunciation is - sent as a tiny
+                follow-up so the user knows which voice they just heard.
+                */
+                await sock.sendMessage(msg.key.remoteJid, {
+                    text: `🔊 _${plan.langName} pronunciation of_ *${word}*`
+                });
+            } catch (ttsErr: any) {
+                console.error(`📖 TTS failed for ${plan.langName} (${plan.gttsCode}):`, ttsErr?.message || ttsErr);
+                // Skip this language, continue with the rest
+            }
+        }
 
     } catch (error: any) {
         console.error("Dict error:", error?.message || error);
@@ -231,7 +262,7 @@ async function handleDict(sock: any, msg: WAMessage, text: string) {
 const command: Command = {
     name: "dict",
     aliases: ["define", "dictionary"],
-    description: "Look up a word in Wiktionary with pronunciation audio",
+    description: "Look up a word in Wiktionary with per-language pronunciation",
     usage: "!dict <word>",
     requiresArgs: true,
     handler: handleDict,

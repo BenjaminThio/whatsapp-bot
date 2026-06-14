@@ -1,38 +1,11 @@
 import { WAMessage, downloadMediaMessage } from "@whiskeysockets/baileys";
-import { spawn } from "node:child_process";
 import path from "node:path";
 import { Command } from "./_types.js";
+import { runPythonScript } from "../lib/subprocess.js";
 
-// Helper to spawn native Python, feed it the image, and catch the PNG result
-async function processRembg(inputBuffer: Buffer): Promise<Buffer> {
-    return new Promise((resolve, reject) => {
-        const pyPath = path.join(import.meta.dir, "../modules/rembg_engine.py");
-        
-        // TARGET THE .venv INTERPRETER DIRECTLY!
-        const venvPythonPath = path.join(import.meta.dir, "../../.venv/Scripts/python.exe");
-        const worker = spawn(venvPythonPath, [pyPath]);
-
-        const chunks: Buffer[] = [];
-        let err = "";
-
-        worker.stdout.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        worker.stderr.on("data", (chunk) => (err += chunk.toString("utf8")));
-
-        worker.stdin.on("error", (e) => {});
-
-        worker.on("error", reject);
-        worker.on("close", (code) => {
-            if (code !== 0) {
-                console.error("\n🐍 [PYTHON CRASH LOG - REMOVEBG]:\n", err);
-                return reject(`Process exited with code ${code}`);
-            }
-            resolve(Buffer.concat(chunks));
-        });
-
-        worker.stdin.write(inputBuffer);
-        worker.stdin.end();
-    });
-}
+const PROJECT_ROOT = path.join(import.meta.dir, "../..");
+const PY_SCRIPT = path.join(import.meta.dir, "../modules/rembg_engine.py");
+const TIMEOUT_MS = 2 * 60 * 1000;   // rembg can be slow, esp. first-run model load
 
 async function handleRemoveBg(sock: any, msg: WAMessage, _text: string) {
     if (!msg.key.remoteJid) return;
@@ -40,13 +13,12 @@ async function handleRemoveBg(sock: any, msg: WAMessage, _text: string) {
     const messageBody = msg.message?.ephemeralMessage?.message || msg.message;
     if (!messageBody) return;
 
-    // Check if the user attached an image directly, or replied to one
-    const isDirectImage = !!messageBody.imageMessage;
-    const isQuotedImage = !!messageBody.extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
+    const isDirectImage = !!(messageBody as any).imageMessage;
+    const isQuotedImage = !!(messageBody as any).extendedTextMessage?.contextInfo?.quotedMessage?.imageMessage;
 
     if (!isDirectImage && !isQuotedImage) {
-        await sock.sendMessage(msg.key.remoteJid, { 
-            text: "⚠️ Usage: Reply to an image with `!removebg` or send an image with `!removebg` as the caption." 
+        await sock.sendMessage(msg.key.remoteJid, {
+            text: "⚠️ Usage: Reply to an image with `!removebg` or send an image with `!removebg` as the caption."
         }, { quoted: msg });
         return;
     }
@@ -54,28 +26,30 @@ async function handleRemoveBg(sock: any, msg: WAMessage, _text: string) {
     try {
         await sock.sendMessage(msg.key.remoteJid, { react: { text: "✂️", key: msg.key } });
 
-        // Reconstruct the message payload so Baileys knows what to download
-        const targetMsg = isDirectImage 
-            ? msg 
-            : { key: msg.key, message: messageBody.extendedTextMessage?.contextInfo?.quotedMessage };
+        const targetMsg = isDirectImage
+            ? msg
+            : { key: msg.key, message: (messageBody as any).extendedTextMessage?.contextInfo?.quotedMessage };
 
-        // 1. Download the encrypted image from WhatsApp
         const inputBuffer = await downloadMediaMessage(targetMsg as any, "buffer", {}) as Buffer;
+        console.log(`✂️ Downloaded image: ${(inputBuffer.length / 1024).toFixed(1)} KB`);
 
-        // 2. Blast it through the U^2-Net AI
-        const outputBuffer = await processRembg(inputBuffer);
+        const outputBuffer = await runPythonScript(PROJECT_ROOT, PY_SCRIPT, {
+            input: inputBuffer,
+            label: "removebg",
+            timeoutMs: TIMEOUT_MS,
+        });
+        console.log(`✂️ Background removed: output ${(outputBuffer.length / 1024).toFixed(1)} KB`);
 
-        // 3. Send the transparent PNG back to the chat!
         await sock.sendMessage(msg.key.remoteJid, {
             image: outputBuffer,
             caption: "✨ Background removed!",
-            mimetype: "image/png" 
+            mimetype: "image/png"
         }, { quoted: msg });
 
-    } catch (error) {
-        console.error("Rembg Error:", error);
-        await sock.sendMessage(msg.key.remoteJid, { 
-            text: "❌ Failed to process the image. Check server logs." 
+    } catch (error: any) {
+        console.error("Rembg Error:", error?.message || error);
+        await sock.sendMessage(msg.key.remoteJid, {
+            text: "❌ Failed to process the image. Check server logs."
         }, { quoted: msg });
     }
 }

@@ -1,9 +1,9 @@
 import { WAMessage } from "@whiskeysockets/baileys";
-import { spawn } from "node:child_process";
 import path from "node:path";
 import yts from "yt-search";
 import { activeSearches, savedPollMessages } from "../memory.js";
 import { Command } from "./_types.js";
+import { runHelper } from "../lib/subprocess.js";
 
 interface MusicInfo {
     status: "success" | "error";
@@ -16,27 +16,32 @@ interface MusicInfo {
     message?: string;
 }
 
-const getMusicInfo = (url: string): Promise<MusicInfo> =>
-    new Promise((resolve, reject) => {
-        const exePath = path.join(import.meta.dir, "../modules/music.exe");
-        const worker = spawn(exePath, [url]);
+const PROJECT_ROOT = path.join(import.meta.dir, "../..");
+const MUSIC_EXE = path.join(import.meta.dir, "../modules/music.exe");
+const MUSIC_PY = path.join(import.meta.dir, "../modules/music_engine.py");
+const MUSIC_TIMEOUT_MS = 60_000;
 
-        let err = "";
-        let out = "";
-
-        worker.stderr.on("data", (d) => (err += d.toString("utf8")));
-        worker.stdout.on("data", (d) => (out += d.toString("utf8")));
-
-        worker.on("error", reject);
-        worker.on("close", (code) => {
-            if (code !== 0) return reject(err || "Process exited with error code");
-            try {
-                resolve(JSON.parse(out));
-            } catch (e) {
-                reject("Failed to parse JSON output: " + out);
-            }
-        });
+/**
+ * Run the music engine for a single URL and parse its JSON output.
+ * The engine takes the URL as a CLI arg and prints a MusicInfo JSON to stdout.
+ * Cross-platform: music.exe on Windows, music_engine.py on Termux/Linux.
+ */
+async function getMusicInfo(url: string): Promise<MusicInfo> {
+    const out = await runHelper(PROJECT_ROOT, {
+        winExe: MUSIC_EXE,
+        pyScript: MUSIC_PY,
+        args: [url],
+        label: "music",
+        timeoutMs: MUSIC_TIMEOUT_MS,
     });
+
+    const text = out.toString("utf8").trim();
+    try {
+        return JSON.parse(text) as MusicInfo;
+    } catch {
+        throw new Error("Failed to parse music engine JSON output:\n" + text.slice(0, 500));
+    }
+}
 
 // Exported because the poll handler in index.ts calls this after a vote
 export async function processMediaDownload(sock: any, targetUrl: string, jid: string, originalMsg: any) {
@@ -45,7 +50,7 @@ export async function processMediaDownload(sock: any, targetUrl: string, jid: st
 
         const musicInfo = await getMusicInfo(targetUrl);
         if (musicInfo.status === "error" || !musicInfo.url) {
-            await sock.sendMessage(jid, { text: `❌ Failed: ${musicInfo.message}` }, { quoted: originalMsg });
+            await sock.sendMessage(jid, { text: `❌ Failed: ${musicInfo.message ?? "unknown error"}` }, { quoted: originalMsg });
             return;
         }
 
@@ -66,8 +71,8 @@ export async function processMediaDownload(sock: any, targetUrl: string, jid: st
             caption: musicInfo.title || "🎵 Here is your media!"
         }, { quoted: originalMsg });
 
-    } catch (error) {
-        console.error("Play command error:", error);
+    } catch (error: any) {
+        console.error("Play command error:", error?.message || error);
         await sock.sendMessage(jid, { text: "❌ An internal error occurred during download." }, { quoted: originalMsg });
     }
 }
