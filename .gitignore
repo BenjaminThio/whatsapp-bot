@@ -1,44 +1,29 @@
-# dependencies (bun install)
-node_modules
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
 
-# output
-out
-dist
-*.tgz
-
-# code coverage
-coverage
-*.lcov
-
-# logs
-logs
-_.log
-report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
-
-# dotenv environment variable files
+# Secrets & credentials
 .env
-.env.development.local
-.env.test.local
-.env.production.local
-.env.local
-
-# caches
-.eslintcache
-.cache
-*.tsbuildinfo
-
-# IntelliJ based IDEs
-.idea
-
-# Finder (MacOS) folder config
-.DS_Store
-
-auth_info_baileys
-
+firebase-key.json
 serviceAccountKey.json
+auth_info_baileys/
+*.session
 
-enwiktionary-latest-pages-articles.xml
-dict.dat
-dict.idx
+# Compiled binaries (rebuild on each platform)
+*.exe
+src/modules/*.exe
+dict/*.exe
+dict/dict_lookup
+dict/dict_indexer
 
-executables
+# Huge data files (see note below)
+dict/*.dat
+dict/*.idx
+dict/enwiktionary-*.xml
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+*.log
