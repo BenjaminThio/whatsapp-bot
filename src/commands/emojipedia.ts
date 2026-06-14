@@ -3,201 +3,241 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { Command } from "./_types.js";
 
-// Data shape
+// ─── Data shape (updated for the new JSONL format with designs) ───
+interface Timeline {
+    date: string;
+    image_url: string;
+    version: string;
+}
+interface Design {
+    title: string;
+    description: string;
+    timelines: Timeline[];
+}
 interface EmojiEntry {
     character: string;
     name: string;
-    description: string[];          // index 0 = blurb, last = approval history
-    code: string;                   // ":shortcode:"
-    render_quality: number;         // 1=poor, 4=excellent (Emojipedia's metric)
-    version: number;                // Emoji version it was approved in
-    category: {
-        main: string | null;
-        sub: string | null;
-    };
-    alias?: string[];               // additional shortcodes
-    variant?: boolean;              // has a Variation Selector form
-    alert?: string;                 // platform warning / new-emoji notice
+    description: string[];
+    code: string;
+    render_quality: number;
+    version: number;
+    category: { main: string | null; sub: string | null };
+    alias?: string[];
+    variant?: boolean;
+    alert?: string;
+    designs?: Design[];          // NEW: per-platform design history
 }
 
-// Lazy-loaded indexes - built once on first query, reused forever
+// ─── Lazy-loaded indexes ───
 let entries: EmojiEntry[] | null = null;
 let byChar: Map<string, EmojiEntry> | null = null;
-let byCode: Map<string, EmojiEntry> | null = null;       // shortcodes + aliases
-let byNameLower: Map<string, EmojiEntry> | null = null;  // exact lowercased name
+let byCode: Map<string, EmojiEntry> | null = null;
+let byNameLower: Map<string, EmojiEntry> | null = null;
 
-const DATA_PATH = path.join(import.meta.dir, "../../data/emoji.json");
+// NOTE: file is now JSONL (.jsonl), one JSON object per line.
+const DATA_PATH = path.join(import.meta.dir, "../../data/emoji.jsonl");
+
+// Which design platform to prefer for the image. Microsoft Teams first (as
+// requested), then sensible fallbacks for emojis that lack a Teams design.
+const PREFERRED_DESIGNS = [
+    "Microsoft Teams",
+    "WhatsApp",
+    "Apple",
+    "Google Noto Color Emoji",
+    "Twitter",
+];
 
 function loadIndexes(): void {
-    if (entries) return;  // already loaded
+    if (entries) return;
 
     if (!existsSync(DATA_PATH)) {
         throw new Error(`Emoji data file not found at ${DATA_PATH}`);
     }
 
-    console.log("📖 Loading emojipedia data...");
+    console.log("📖 Loading emojipedia data (JSONL)...");
     const raw = readFileSync(DATA_PATH, "utf-8");
-    entries = JSON.parse(raw) as EmojiEntry[];
 
+    entries = [];
     byChar = new Map();
     byCode = new Map();
     byNameLower = new Map();
 
-    for (const e of entries) {
+    let lineNo = 0;
+    let skipped = 0;
+    for (const line of raw.split("\n")) {
+        lineNo++;
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        let e: EmojiEntry;
+        try {
+            e = JSON.parse(trimmed) as EmojiEntry;
+        } catch {
+            skipped++;
+            continue;   // tolerate a bad line rather than crashing the whole load
+        }
+        entries.push(e);
         if (e.character) byChar.set(e.character, e);
         if (e.code) byCode.set(e.code.toLowerCase(), e);
-        if (e.alias) {
-            for (const a of e.alias) byCode.set(a.toLowerCase(), e);
-        }
+        if (e.alias) for (const a of e.alias) byCode.set(a.toLowerCase(), e);
         if (e.name) byNameLower.set(e.name.toLowerCase(), e);
     }
 
-    console.log(`📖 Indexed ${entries.length} emoji entries.`);
+    console.log(`📖 Indexed ${entries.length} emoji entries${skipped ? ` (${skipped} malformed lines skipped)` : ""}.`);
 }
 
-/*
-Lookup strategy:
-1. Try exact character match (handles emoji input directly)
-2. Try shortcode/alias match (handles :pizza: input)
-3. Try exact name match (case-insensitive)
-4. Fuzzy substring scan, ranked by closeness
-*/
+// ─── Lookup (unchanged logic) ───
 function findEntry(query: string): { entry: EmojiEntry; method: string } | { suggestions: EmojiEntry[] } | null {
     if (!entries || !byChar || !byCode || !byNameLower) return null;
 
     const q = query.trim();
     if (!q) return null;
 
-    // 1. Direct character match (also handles short emoji sequences)
-    if (byChar.has(q)) {
-        return { entry: byChar.get(q)!, method: "character" };
-    }
+    if (byChar.has(q)) return { entry: byChar.get(q)!, method: "character" };
 
-    // 2. Shortcode - try both "pizza" and ":pizza:" forms
     const qLower = q.toLowerCase();
     const codeForm = qLower.startsWith(":") && qLower.endsWith(":") ? qLower : `:${qLower}:`;
-    if (byCode.has(codeForm)) {
-        return { entry: byCode.get(codeForm)!, method: "shortcode" };
-    }
-    if (byCode.has(qLower)) {
-        return { entry: byCode.get(qLower)!, method: "shortcode" };
-    }
+    if (byCode.has(codeForm)) return { entry: byCode.get(codeForm)!, method: "shortcode" };
+    if (byCode.has(qLower)) return { entry: byCode.get(qLower)!, method: "shortcode" };
 
-    // 3. Exact name match
-    if (byNameLower.has(qLower)) {
-        return { entry: byNameLower.get(qLower)!, method: "name" };
-    }
+    if (byNameLower.has(qLower)) return { entry: byNameLower.get(qLower)!, method: "name" };
 
-    // 4. Fuzzy: substring + token-overlap scoring. Cheap enough at 5k entries.
     const qTokens = qLower.split(/\s+/).filter(Boolean);
     const scored: Array<{ entry: EmojiEntry; score: number }> = [];
 
     for (const e of entries) {
         const nameLower = e.name.toLowerCase();
         let score = 0;
-
-        // Full substring match: strong signal
         if (nameLower.includes(qLower)) {
             score += 100;
-            // Prefix match is even better
             if (nameLower.startsWith(qLower)) score += 50;
         }
-
-        // Token-overlap: every query word that appears in the name = bonus
         for (const t of qTokens) {
             if (t.length >= 2 && nameLower.includes(t)) score += 10;
         }
-
-        // Shortcode partial match
         if (e.code.toLowerCase().includes(qLower)) score += 30;
-        if (e.alias) {
-            for (const a of e.alias) {
-                if (a.toLowerCase().includes(qLower)) score += 20;
-            }
-        }
-
+        if (e.alias) for (const a of e.alias) if (a.toLowerCase().includes(qLower)) score += 20;
         if (score > 0) scored.push({ entry: e, score });
     }
 
     if (scored.length === 0) return null;
-
     scored.sort((a, b) => b.score - a.score);
 
-    // If the top hit is overwhelmingly better than #2, treat it as the answer.
-    // Otherwise, return suggestions for the user to pick from.
     const top = scored[0];
     const runnerUp = scored[1];
     if (top.score >= 100 && (!runnerUp || top.score >= runnerUp.score * 2)) {
         return { entry: top.entry, method: "fuzzy" };
     }
-
     return { suggestions: scored.slice(0, 6).map(s => s.entry) };
 }
 
+// ─── Design / image selection ───
+interface PickedImage {
+    url: string;
+    platformTitle: string;
+    version: string;
+    date: string;
+}
 
-// Formatting
-const MAX_MSG = 3800;  // WhatsApp soft limit is ~4096; leave headroom
+/**
+ * Pick the best image for an emoji. Walks PREFERRED_DESIGNS in order; for the
+ * first design whose title matches, returns its newest timeline image (the last
+ * entry, which is chronologically latest). Returns null if no design/image.
+ */
+function pickImage(entry: EmojiEntry): PickedImage | null {
+    if (!entry.designs || entry.designs.length === 0) return null;
 
-function formatEntry(entry: EmojiEntry, method: string): string {
+    for (const pref of PREFERRED_DESIGNS) {
+        const design = entry.designs.find(d => d.title.includes(pref));
+        if (design && design.timelines.length > 0) {
+            // Last timeline = newest design version
+            const latest = design.timelines[design.timelines.length - 1];
+            if (latest.image_url) {
+                return {
+                    url: latest.image_url,
+                    platformTitle: design.title,
+                    version: latest.version,
+                    date: latest.date,
+                };
+            }
+        }
+    }
+
+    // Nothing in the preferred list matched — fall back to the very first design
+    const first = entry.designs[0];
+    if (first && first.timelines.length > 0) {
+        const latest = first.timelines[first.timelines.length - 1];
+        if (latest.image_url) {
+            return { url: latest.image_url, platformTitle: first.title, version: latest.version, date: latest.date };
+        }
+    }
+    return null;
+}
+
+/** Download an image URL into a Buffer, or null on failure. */
+async function fetchImage(url: string): Promise<Buffer | null> {
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 10_000);
+        const res = await fetch(url, {
+            signal: controller.signal,
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/124.0.0.0 Safari/537.36" },
+        });
+        clearTimeout(timer);
+        if (!res.ok) return null;
+        const ct = res.headers.get("content-type") || "";
+        if (!ct.startsWith("image/")) return null;
+        const buf = Buffer.from(await res.arrayBuffer());
+        if (buf.length === 0 || buf.length > 16 * 1024 * 1024) return null;
+        return buf;
+    } catch {
+        return null;
+    }
+}
+
+// ─── Formatting ───
+const MAX_CAPTION = 1024;   // WhatsApp image caption limit
+
+function formatEntry(entry: EmojiEntry, method: string, picked: PickedImage | null): string {
     const lines: string[] = [];
-
-    // Header: name + emoji
     lines.push(`📖 *${entry.name}*  ${entry.character}`);
     lines.push("");
 
-    // Category
     if (entry.category.main || entry.category.sub) {
         const parts = [entry.category.main, entry.category.sub].filter(Boolean);
         lines.push(`📂 ${parts.join(" › ")}`);
     }
 
-    // Shortcode + aliases
     lines.push(`🔖 Shortcode: \`${entry.code}\``);
     if (entry.alias && entry.alias.length > 0) {
-        const formatted = entry.alias.map(a => `\`${a}\``).join(", ");
-        lines.push(`🪶 Aliases: ${formatted}`);
+        lines.push(`🪶 Aliases: ${entry.alias.map(a => `\`${a}\``).join(", ")}`);
     }
-
-    // Version
     lines.push(`📦 Emoji ${entry.version}`);
 
-    // Alert (warnings, new-emoji notices)
+    // Note which platform's artwork is shown
+    if (picked) {
+        lines.push(`🎨 _Showing:_ ${picked.platformTitle}`);
+    }
+
     if (entry.alert) {
         lines.push("");
         lines.push(`⚠️ ${entry.alert}`);
     }
 
-    // Description (main blurb)
     if (entry.description.length > 0) {
         lines.push("");
         lines.push("📝 _Description_");
         lines.push(entry.description[0]);
     }
 
-    // History (typically the last description item, mentions Unicode approval)
-    if (entry.description.length > 1) {
-        const history = entry.description[entry.description.length - 1];
-        // Only include if it's clearly metadata (mentions "approved" or "Unicode")
-        if (/approved|unicode/i.test(history)) {
-            lines.push("");
-            lines.push("ℹ️ _History_");
-            lines.push(history);
-        }
-    }
-
-    // Match method footer - only show for fuzzy so users know it wasn't exact
     if (method === "fuzzy") {
         lines.push("");
         lines.push("_(closest fuzzy match)_");
     }
 
     let out = lines.join("\n");
-
-    // Truncate if too long, prioritizing keeping the header + metadata visible
-    if (out.length > MAX_MSG) {
-        out = out.slice(0, MAX_MSG - 50) + "\n\n... _(truncated)_";
+    if (out.length > MAX_CAPTION) {
+        out = out.slice(0, MAX_CAPTION - 20) + "\n\n... _(more)_";
     }
-
     return out;
 }
 
@@ -210,7 +250,7 @@ function formatSuggestions(suggestions: EmojiEntry[]): string {
     return lines.join("\n");
 }
 
-// Handler
+// ─── Handler ───
 async function handleEmojipedia(sock: any, msg: WAMessage, text: string) {
     if (!msg.key.remoteJid) return;
 
@@ -224,7 +264,6 @@ async function handleEmojipedia(sock: any, msg: WAMessage, text: string) {
 
     try {
         loadIndexes();
-
         const result = findEntry(args);
 
         if (!result) {
@@ -235,15 +274,31 @@ async function handleEmojipedia(sock: any, msg: WAMessage, text: string) {
         }
 
         if ("suggestions" in result) {
-            await sock.sendMessage(msg.key.remoteJid, {
-                text: formatSuggestions(result.suggestions)
-            }, { quoted: msg });
+            await sock.sendMessage(msg.key.remoteJid, { text: formatSuggestions(result.suggestions) }, { quoted: msg });
             return;
         }
 
-        await sock.sendMessage(msg.key.remoteJid, {
-            text: formatEntry(result.entry, result.method)
-        }, { quoted: msg });
+        const entry = result.entry;
+        const picked = pickImage(entry);
+        const caption = formatEntry(entry, result.method, picked);
+
+        // Try to send the image (Microsoft Teams design preferred) with the info
+        // as the caption. Image captions render reliably, unlike audio captions.
+        if (picked) {
+            const imgBuf = await fetchImage(picked.url);
+            if (imgBuf) {
+                await sock.sendMessage(msg.key.remoteJid, {
+                    image: imgBuf,
+                    caption,
+                }, { quoted: msg });
+                return;
+            }
+            // Image download failed — fall through to text-only
+            console.warn(`📖 Failed to download image for ${entry.name}: ${picked.url}`);
+        }
+
+        // No design/image, or download failed → text only
+        await sock.sendMessage(msg.key.remoteJid, { text: caption }, { quoted: msg });
 
     } catch (error: any) {
         console.error("Emojipedia error:", error?.message || error);
@@ -256,7 +311,7 @@ async function handleEmojipedia(sock: any, msg: WAMessage, text: string) {
 const command: Command = {
     name: "emojipedia",
     aliases: ["emoji", "ep"],
-    description: "Look up emoji info (description, category, shortcode, history)",
+    description: "Look up emoji info with its Microsoft Teams artwork",
     usage: "!emojipedia <emoji | name | :shortcode:>",
     requiresArgs: true,
     handler: handleEmojipedia,
