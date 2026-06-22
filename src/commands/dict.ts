@@ -11,7 +11,6 @@ const DICT_EXE = path.join(
     process.platform === "win32" ? "dict_lookup.exe" : "dict_lookup"
 );
 const DICT_DIR = path.join(import.meta.dir, "../../dict");
-
 const QUERY_TIMEOUT_MS = 30_000;
 const TEXT_MAX = 3800;
 
