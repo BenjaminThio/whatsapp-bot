@@ -1,8 +1,8 @@
 import { WAMessage, downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { readBarcodes } from "zxing-wasm";
 import { Command } from "./_types.js";
-import { decodeQr } from "../lib/hi-hive/decode-qr.js";
-import type { DecodedQr } from "../lib/hi-hive/types.js";
+import { decodeQr } from "../lib/old-hi-hive/decode-qr.js";
+import type { DecodedQr } from "../lib/old-hi-hive/types.js";
 
 /*
   !decode                — send or reply to a QR image → zxing scan → validate attendance header → decode offline

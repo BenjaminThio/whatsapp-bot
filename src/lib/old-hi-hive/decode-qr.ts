@@ -8,9 +8,9 @@
  *   4. Runs the offline expiry prediction (predict_expiry)
  *   5. Returns everything as structured data
  */
-import { loadCreds, DEFAULT_CREDS_PATH } from "./creds.js";
+import { loadCreds, DEFAULT_CREDS_PATH } from "../hi-hive/creds.js";
 import { aesDecrypt } from "./crypto.js";
-import type { DecodeQrResult, DecodeQrError, DecodedQr, QrInfo } from "./types.js";
+import type { DecodeQrResult, DecodeQrError, DecodedQr, QrInfo } from "../hi-hive/types.js";
 
 const QR_SEPARATOR   = ":*:";
 const INFO_SEPARATOR = ":-:";

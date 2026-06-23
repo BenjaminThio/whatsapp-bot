@@ -1,8 +1,8 @@
 import { WAMessage, downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { readBarcodes, writeBarcode } from "zxing-wasm";
 import { Command } from "./_types.js";
-import { scanQr } from "../lib/hi-hive/scan-qr.js";
-import type { ScanQrResult } from "../lib/hi-hive/types.js";
+import { scanQr } from "../lib/old-hi-hive/scan-qr.js";
+import type { ScanQrResult } from "../lib/old-hi-hive/types.js";
 
 /*
   !scan                          — reply to an image → scan QR, return regenerated QR + raw string
@@ -112,15 +112,6 @@ function formatScanResult(result: ScanQrResult): string {
                 lines.push(`❌ *Not Marked*`);
                 lines.push(`📋 ${result.message}`);
                 break;
-            case "token_expired":
-                lines.push(`🔐 *Session Expired*`);
-                lines.push(result.message);
-                lines.push(`\n💡 Update _utarEncryptedData_ in creds.json, or set _utarStudentId_ for auto-generation.`);
-                break;
-            case "scanner_page":
-                lines.push(`⏱️ *QR Window Missed*`);
-                lines.push(result.message);
-                break;
             case "invalid_qr":
                 lines.push(`❌ *Invalid QR*`);
                 lines.push(result.message);
@@ -128,7 +119,7 @@ function formatScanResult(result: ScanQrResult): string {
             case "auth_error":
                 lines.push(`🔐 *Auth Error*`);
                 lines.push(result.message);
-                lines.push(`\n💡 Check _utarStudentId_ / _utarEncryptedData_ in creds.json.`);
+                lines.push(`\n💡 Try _!refresh_ to get a new session.`);
                 break;
             case "network_error":
                 lines.push(`🌐 *Network Error*`);

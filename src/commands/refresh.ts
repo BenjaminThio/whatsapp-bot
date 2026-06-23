@@ -1,6 +1,6 @@
 import { WAMessage } from "@whiskeysockets/baileys";
 import { Command } from "./_types.js";
-import { refreshToken } from "../lib/hi-hive/refresh-token.js";
+import { refreshToken } from "../lib/old-hi-hive/refresh-token.js";
 
 /*
   !refresh

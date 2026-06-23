@@ -1,8 +1,8 @@
 import { WAMessage } from "@whiskeysockets/baileys";
 import { writeBarcode } from "zxing-wasm";
 import { Command } from "./_types.js";
-import { loadCreds } from "../lib/hi-hive/creds.js";
-import { aesEncrypt } from "../lib/hi-hive/crypto.js";
+import { loadCreds } from "../lib/old-hi-hive/creds.js";
+import { aesEncrypt } from "../lib/old-hi-hive/crypto.js";
 
 /*
   !genqr <type> <args...>

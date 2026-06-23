@@ -6,15 +6,21 @@ import type { GetAttendanceResult, AttendanceCourse } from "../lib/hi-hive/types
 /*
   !attendance [course_code]
 
-  Fetches attendance data from the API using the sessionId in creds.json.
-  Mirrors exactly what scanner.py's `a` command does via show_attendance_for_course.
+  Fetches UTAR attendance via the web portal, parses the HTML report into
+  structured data, and formats it exactly like the old hi-hive formatter:
+    - Student profile header
+    - Per-course progress bar with attended/total hours
+    - Per-session records with status emoji
+    - Overall % at the bottom
 
   Usage:
-    !attendance               — full table, all courses + overall %
+    !attendance               — full report, all courses
     !attendance UECS2194      — filter to one course (case-insensitive substring)
 */
 
-const PCT_BAR_LEN = 10; // character width of the visual bar
+// ─── Formatter (restored from old hi-hive formatter) ─────────────────────────
+
+const PCT_BAR_LEN = 10;
 
 function pctBar(pct: number | null): string {
   if (pct === null) return "▒".repeat(PCT_BAR_LEN) + " —";
@@ -22,65 +28,6 @@ function pctBar(pct: number | null): string {
   const bar = "█".repeat(filled) + "░".repeat(PCT_BAR_LEN - filled);
   const icon = pct >= 80 ? "✅" : pct >= 60 ? "⚠️" : "❌";
   return `${bar} ${pct}% ${icon}`;
-}
-
-function formatAttendance(result: GetAttendanceResult, courseFilter?: string): string {
-  // ── Error states ──────────────────────────────────────────────────────────
-  if (!result.ok) {
-    return `❌ *Attendance Error*\n${result.message}`;
-  }
-
-  if (result.no_record) {
-    return (
-      "⚠️ *No attendance record found.*\n" +
-      "Your sessionId may be stale — try _!refresh_ to get a new one."
-    );
-  }
-
-  const lines: string[] = [];
-
-  // ── Profile header ────────────────────────────────────────────────────────
-  const prof = result.profile;
-  if (prof) {
-    lines.push(`👤 *${prof.name ?? "?"}* (${prof.studentId ?? "?"})`);
-    if (prof.session) lines.push(`📅 Session: ${prof.session}`);
-  }
-  lines.push("─".repeat(36));
-
-  // ── Course rows ───────────────────────────────────────────────────────────
-  const courses = result.courses;
-
-  if (courses.length === 0) {
-    lines.push(courseFilter
-      ? `No course matching _${courseFilter}_ found.`
-      : "No course data available.");
-    return lines.join("\n");
-  }
-
-  for (const c of courses) {
-    const att = c.attended === null ? "—" : c.attended.toFixed(1);
-    const tot = c.total    === null ? "—" : c.total.toFixed(1);
-    lines.push(`\n📚 *${c.name ?? "?"}*`);
-    lines.push(`   ${pctBar(c.percent)}  (${att}/${tot}h)`);
-
-    // Show individual session records
-    if (c.records.length > 0) {
-      for (const rec of c.records) {
-        const who = rec.recordedByName ?? rec.recordedByEmail ?? "?";
-        const when = rec.classDatetime ?? "?";
-        const statusIcon = statusEmoji(rec.status);
-        lines.push(`   ${statusIcon} ${when}  _by ${who}_`);
-      }
-    }
-  }
-
-  // ── Overall ───────────────────────────────────────────────────────────────
-  if (!courseFilter && result.overallPercent !== null) {
-    lines.push("\n" + "─".repeat(36));
-    lines.push(`📊 *Overall: ${result.overallPercent}%*`);
-  }
-
-  return lines.join("\n");
 }
 
 function statusEmoji(status: string | null): string {
@@ -93,41 +40,118 @@ function statusEmoji(status: string | null): string {
   }
 }
 
+function formatCourse(c: AttendanceCourse): string {
+  const lines: string[] = [];
+  const att = c.attended === null ? "—" : c.attended.toFixed(1);
+  const tot = c.total    === null ? "—" : c.total.toFixed(1);
+
+  lines.push(`\n📚 *${c.name ?? c.code ?? "?"}*`);
+  lines.push(`   ${pctBar(c.percent)}  (${att}/${tot}h)`);
+
+  for (const rec of c.records) {
+    const who  = rec.recordedByName ?? rec.recordedByEmail ?? "?";
+    const when = rec.classDatetime  ?? "?";
+    lines.push(`   ${statusEmoji(rec.status)} ${when}  _by ${who}_`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatAttendance(result: GetAttendanceResult, courseFilter?: string): string {
+  // ── Error states ──────────────────────────────────────────────────────────
+  if (!result.ok) {
+    return (
+      `❌ *Attendance Error*\n${result.message}\n\n` +
+      `💡 Make sure _utarStudentId_ or _utarEncryptedData_ is in creds.json,\n` +
+      `and _UTAR_SCAN_URL_ / _UTAR_REPORT_URL_ env vars are set.`
+    );
+  }
+
+  if (result.no_record) {
+    return (
+      "⚠️ *No attendance record found.*\n" +
+      (courseFilter
+        ? `No courses matching _${courseFilter}_.`
+        : "The report page returned no course data.")
+    );
+  }
+
+  // courses[] is empty but message has raw text — parser couldn't read the
+  // HTML table structure. Show the raw text so you can diagnose + send it to
+  // the dev to fix the parser. Set DEBUG_ATTENDANCE=1 to also dump the HTML.
+  if (result.courses.length === 0 && result.message !== "OK") {
+    return (
+      `📋 *Attendance (raw — table parse failed)*\n` +
+      `_Set DEBUG_ATTENDANCE=1 and check /tmp/utar_attendance_debug.html_\n\n` +
+      `${"─".repeat(36)}\n` +
+      result.message
+    );
+  }
+
+  const lines: string[] = [];
+
+  // ── Profile header ────────────────────────────────────────────────────────
+  const prof = result.profile;
+  if (prof?.name || prof?.studentId) {
+    lines.push(`👤 *${prof.name ?? "?"}* (${prof.studentId ?? "?"})`);
+    if (prof.session) lines.push(`📅 Session: ${prof.session}`);
+  }
+  lines.push("─".repeat(36));
+
+  // ── Course rows ───────────────────────────────────────────────────────────
+  if (result.courses.length === 0) {
+    lines.push(courseFilter
+      ? `No course matching _${courseFilter}_ found.`
+      : "No course data available.");
+    return lines.join("\n");
+  }
+
+  for (const c of result.courses) {
+    lines.push(formatCourse(c));
+  }
+
+  // ── Overall ───────────────────────────────────────────────────────────────
+  if (!courseFilter && result.overallPercent !== null) {
+    lines.push("\n" + "─".repeat(36));
+    lines.push(`📊 *Overall: ${result.overallPercent}%*`);
+  }
+
+  return lines.join("\n");
+}
+
+// ─── Handler ──────────────────────────────────────────────────────────────────
+
 async function handleAttendance(sock: any, msg: WAMessage, text: string) {
   if (!msg.key.remoteJid) return;
+  const jid = msg.key.remoteJid;
 
-  // Optional course filter after "!attendance"
   const courseFilter = text.slice("!attendance".length).trim() || undefined;
 
-  await sock.sendMessage(msg.key.remoteJid, {
-    react: { text: "⏳", key: msg.key }
-  });
+  await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
 
   try {
-    const result = await getAttendance(courseFilter);
-    const reply = formatAttendance(result, courseFilter);
+    const result = await getAttendance({ courseCode: courseFilter });
+    const reply  = formatAttendance(result, courseFilter);
 
-    await sock.sendMessage(msg.key.remoteJid, { text: reply }, { quoted: msg });
-
-    await sock.sendMessage(msg.key.remoteJid, {
-      react: { text: result.ok && !result.no_record ? "✅" : "❌", key: msg.key }
+    await sock.sendMessage(jid, { text: reply }, { quoted: msg });
+    await sock.sendMessage(jid, {
+      react: { text: result.ok && !result.no_record ? "✅" : "❌", key: msg.key },
     });
-
   } catch (err: any) {
     console.error("!attendance error:", err);
-    await sock.sendMessage(msg.key.remoteJid, {
-      text: `❌ Unexpected error: ${err?.message ?? err}`
+    await sock.sendMessage(jid, {
+      text: `❌ Unexpected error: ${err?.message ?? err}`,
     }, { quoted: msg });
-    await sock.sendMessage(msg.key.remoteJid, {
-      react: { text: "❌", key: msg.key }
-    });
+    await sock.sendMessage(jid, { react: { text: "❌", key: msg.key } });
   }
 }
+
+// ─── Command definition ───────────────────────────────────────────────────────
 
 const command: Command = {
   name: "attendance",
   aliases: ["att", "a"],
-  description: "Fetch your attendance record. Optionally filter by course code.",
+  description: "Fetch your UTAR attendance report with course breakdown and progress bars",
   usage: "!attendance [course_code]",
   requiresArgs: false,
   handler: handleAttendance,

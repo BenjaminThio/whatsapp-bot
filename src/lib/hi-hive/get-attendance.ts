@@ -1,15 +1,20 @@
 /**
- * getAttendance - mirrors the `a` command from scanner.py (show_attendance_for_course).
+ * getAttendance — mirrors show_attendance() from utar_attendance.py.
  *
- * What it does (exactly like scanner.py):
- *   1. Reads sessionId + userId from creds.json
- *   2. Calls the attendance endpoint directly (the one confirmed endpoint)
- *   3. Parses the custom ":*:" / ":**:" / ":***:" delimited response (parse_attendance)
- *   4. Optionally filters to a single course (course_filter)
- *   5. Computes overall attendance %
- *   6. Returns structured data
+ * Flow:
+ *   1. Resolve UTAR token (stored utarEncryptedData, or auto-generate)
+ *   2. POST to SCAN_URL to establish the web session cookie
+ *   3. POST to REPORT_URL — try encryptedData=realToken, then "null"
+ *   4. Parse the HTML attendance table into structured AttendanceCourse[]
+ *      so the formatter can render progress bars, records, and overall %
+ *
+ * Env vars:
+ *   UTAR_SCAN_URL    — e.g. "https://www.hi-hive.com/UTAR/main.jsp"
+ *   UTAR_REPORT_URL  — e.g. "https://www.hi-hive.com/UTAR/QRAttendanceReport.jsp"
  */
+
 import { loadCreds, DEFAULT_CREDS_PATH } from "./creds.js";
+import { generateEncryptedData } from "./scan-qr.js";
 import type {
   GetAttendanceResult,
   AttendanceCourse,
@@ -17,7 +22,14 @@ import type {
   AttendanceProfile,
 } from "./types.js";
 
-const UA = { "User-Agent": "okhttp/4.9.1" };
+const UA_BROWSER = {
+  "User-Agent":   "Mozilla/5.0 (Linux; Android 16; CPH2637) AppleWebKit/537.36 " +
+                  "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
+  "Accept":       "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  "Content-Type": "application/x-www-form-urlencoded",
+  "Origin":       "https://www.hi-hive.com",
+  "Referer":      "https://portal.utar.edu.my/stuIntranet/default.jsp",
+};
 
 const STATUS_LABELS: Record<string, string> = {
   A: "Attended",
@@ -26,174 +38,309 @@ const STATUS_LABELS: Record<string, string> = {
   L: "On Leave",
 };
 
-// Public API
+// ─── Public API ───────────────────────────────────────────────────────────────
 
-/**
- * Fetch and return attendance data.
- *
- * @param attendanceEndpoint - The attendance API endpoint URL (ATTENDANCE_ENDPOINT env var equivalent)
- * @param courseCode         - Optional: filter results to this course code (case-insensitive substring match)
- * @param credsPath          - Path to creds.json (default: "creds.json")
- */
+export interface GetAttendanceOptions {
+  scanUrl?:   string;
+  reportUrl?: string;
+  courseCode?: string;
+  credsPath?: string;
+}
+
 export async function getAttendance(
-  courseCode?: string,
+  options: GetAttendanceOptions = {}
 ): Promise<GetAttendanceResult> {
-    const attendanceEndpoint = process.env["ATTENDANCE_ENDPOINT"] ?? "";
-    const credsPath = DEFAULT_CREDS_PATH;
-    
-    if (!attendanceEndpoint) {
-        return {
-            ok: false,
-            no_record: false,
-            profile: null,
-            courses: [],
-            overallPercent: null,
-            message: "Attendance endpoint not found!"
-        };
-    }
+  const scanUrl   = options.scanUrl   ?? process.env["UTAR_SCAN_URL"]   ?? "";
+  const reportUrl = options.reportUrl ?? process.env["UTAR_REPORT_URL"] ?? "";
+  const credsPath = options.credsPath ?? DEFAULT_CREDS_PATH;
 
-    const creds = loadCreds(credsPath);
+  if (!scanUrl || !reportUrl) {
+    return errResult("UTAR_SCAN_URL and UTAR_REPORT_URL must be set.");
+  }
 
-    if (!creds.sessionId) {
-        return {
-            ok: false,
-            no_record: false,
-            profile: null,
-            courses: [],
-            overallPercent: null,
-            message: "No sessionId in creds.json - run refreshToken() first."
-        };
-    }
+  // ── Resolve token ─────────────────────────────────────────────────────────
+  const creds = loadCreds(credsPath);
+  let utarToken: string;
 
-    // Build URL exactly like attendance.py fetch_attendance
-    const sid   = encodeURIComponent(creds.sessionId);
-    const email = encodeURIComponent(creds.userId);
-    const url   = `${attendanceEndpoint}?sid=${sid}&type=201&email=${email}`;
+  if (creds.utarEncryptedData) {
+    utarToken = creds.utarEncryptedData;
+  } else if (creds.utarStudentId && creds.userId) {
+    utarToken = generateEncryptedData(creds.utarStudentId, creds.userId);
+  } else {
+    return errResult(
+      "No UTAR token. Add utarEncryptedData or utarStudentId to creds.json."
+    );
+  }
 
-    let text: string;
-    try {
-        const res = await fetch(url, { headers: UA });
-        if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-        text = await res.text();
-    } catch (e) {
-        return {
-            ok: false,
-            no_record: false,
-            profile: null,
-            courses: [],
-            overallPercent: null,
-            message: `Attendance fetch failed: ${e}`
-        };
-    }
+  // ── Step 1: establish session ─────────────────────────────────────────────
+  let cookies = "";
+  try {
+    const r = await fetch(scanUrl, {
+      method:   "POST",
+      headers:  UA_BROWSER,
+      body:     new URLSearchParams({ encryptedData: utarToken }),
+      redirect: "follow",
+    });
+    cookies = r.headers.get("set-cookie") ?? "";
+  } catch (e) {
+    return errResult(`Session establishment failed: ${e}`);
+  }
 
-    // Parse the raw response (mirrors parse_attendance from attendance.py)
-    const parsed = parseAttendance(text);
+  // ── Step 2: fetch report — try real token, then "null" ────────────────────
+  const attempts = [
+    { encVal: utarToken, label: "real token" },
+    { encVal: "null",    label: "null"        },
+  ];
 
-    if (!parsed.ok || parsed.no_record) {
-        return {
-        ...parsed,
-        overallPercent: null,
-        message: parsed.no_record
-            ? "No record found. sessionId may be stale - run refreshToken()."
-            : "Parse error.",
-        };
-    }
-
-    // Apply course filter if requested (mirrors course_filter in print_attendance)
-    let courses = parsed.courses;
-    if (courseCode) {
-        courses = courses.filter((c) =>
-        (c.name ?? "").toUpperCase().includes(courseCode.toUpperCase())
-        );
-    }
-
-  const overall = overallPercent(parsed.courses); // always computed on unfiltered list
-
-    return {
-        ok: true,
-        no_record: false,
-        profile: parsed.profile,
-        courses,
-        overallPercent: overall,
-        message: "OK",
+  for (const { encVal, label } of attempts) {
+    const headers: Record<string, string> = {
+      ...UA_BROWSER,
+      "Referer": `${scanUrl}?encryptedData=null`,
     };
-}
+    if (cookies) headers["Cookie"] = cookies;
 
-// Internal parser (mirrors parse_attendance from attendance.py)
-function parseAttendance(text: string): Omit<GetAttendanceResult, "overallPercent" | "message"> {
-    text = text.trim();
-    const top = text.split(":*:");
-
-    if (!top.length || top[0] === "0") {
-        return { ok: true, no_record: true, profile: null, courses: [] };
+    let html: string;
+    let httpStatus: number;
+    try {
+      const r = await fetch(reportUrl, {
+        method:   "POST",
+        headers,
+        body:     new URLSearchParams({ encryptedData: encVal }),
+        redirect: "follow",
+      });
+      httpStatus = r.status;
+      html = await r.text();
+      console.log(`[getAttendance] attempt=${label} http=${httpStatus} bodyLen=${html.length}`);
+      console.log(`[getAttendance] body first 800:\n${html.slice(0, 800)}`);
+    } catch (e) {
+      console.log(`[getAttendance] attempt=${label} fetch threw: ${e}`);
+      continue;
     }
 
-    const courses: AttendanceCourse[] = [];
-    let profile: AttendanceProfile | null = null;
-
-    for (const entry of top.slice(1)) {
-        if (!entry) continue;
-
-        const cs = entry.split(":**:");
-        const pf = (cs[0] ?? "").split(":-:");
-
-        const studentId  = pf[0] ?? null;
-        const name       = pf[1] ?? null;
-        const courseName = pf[2] ?? null;
-        const attendedS  = pf[3] ?? null;
-        const totalS     = pf[4] ?? null;
-        const session    = pf[5] ?? null;
-
-        if (!profile && (studentId || name)) {
-        profile = { studentId, name, session };
-        }
-
-        const attended = safeFloat(attendedS);
-        const total    = safeFloat(totalS);
-        const percent  =
-        attended !== null && total
-            ? Math.round((attended / total) * 100)
-            : attended === 0
-            ? 0
-            : null;
-
-        const records: AttendanceRecord[] = [];
-        if (cs.length > 1) {
-            for (const rec of (cs[1] ?? "").split(":***:")) {
-                if (!rec || rec === "0") continue;
-                const f      = rec.split(":-:");
-                const status = f[7] ?? null;
-                records.push({
-                recordedDatetime: f[0] && f[0] !== "N/A" ? f[0] : null,
-                recordedByEmail:  f[1] ?? null,
-                classDatetime:    f[2] ?? null,
-                type:             f[3] ?? null,
-                classHours:       f[4] ?? null,
-                group:            f[5] ?? null,
-                recordedByName:   f[6] ?? null,
-                status,
-                statusLabel: STATUS_LABELS[status ?? ""] ?? (status ?? ""),
-                });
-            }
-        }
-
-        courses.push({ code: courseName, name: courseName, attended, total, percent, records });
+    const joined = html.toLowerCase();
+    const hasError = joined.includes("something went wrong") || joined.includes("unexpected error");
+    console.log(`[getAttendance] hasError=${hasError}`);
+    if (hasError) {
+      console.log(`[getAttendance] skipping attempt=${label} — error page detected`);
+      continue;
     }
 
-    return { ok: true, no_record: false, profile, courses };
+    // Always dump to file and log stripped text so we can see the real structure
+    try {
+      const fs = await import("fs");
+      fs.writeFileSync("/tmp/utar_attendance_debug.html", html, "utf-8");
+      console.log(`[getAttendance] HTML written to /tmp/utar_attendance_debug.html`);
+    } catch (_) {}
+    const stripped = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+    console.log(`[getAttendance] stripped (first 2000):\n${stripped.slice(0, 2000)}`);
+
+    return parseHtml(html, options.courseCode);
+  }
+
+  return errResult(
+    "Both token attempts returned errors. " +
+    "Refresh utarEncryptedData in creds.json or open the report URL in a browser."
+  );
 }
 
-// mirrors overall_percent from attendance.py
-function overallPercent(courses: AttendanceCourse[]): number | null {
-    const valid = courses.filter((c) => c.attended !== null && c.total);
-    if (!valid.length) return null;
-    const a = valid.reduce((s, c) => s + (c.attended ?? 0), 0);
-    const t = valid.reduce((s, c) => s + (c.total    ?? 0), 0);
-    return t ? Math.round((a / t) * 1000) / 10 : null;
+// ─── Parser for the real UTAR attendance HTML structure ───────────────────────
+//
+// Observed structure (from actual HTML dump):
+//
+// Profile (inside a <td>):
+//   Name: BENJAMIN THIO ZI LIANG
+//   Student ID: 2504142
+//   Session: 202606
+//
+// Per-course collapsible button (multiline <b> inside <button class="collapsible">):
+//   Course: UECS2033 - SOFTWARE PROJECT MANAGEMENT
+//   Total Class Hours attended: 4.0
+//   Total Class Hours: 4.0
+//   Percent: 100
+//
+// Per-session records inside <div class="content"><p>:
+//   (no <table> — pure <br/>-delimited key:value pairs, one block per session)
+//   Class Datetime: 2026-06-22 13:00:00
+//   Recorded Datetime: 2026-06-22 13:06:11
+//   Recorded By: BENJAMIN THIO ZI LIANG
+//   Type: Lecture
+//   Group: 1
+//   Class Hours: 2.0
+//   Status: Attended
+
+function innerText(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")   // <br/> → newline
+    .replace(/<[^>]+>/g, "")         // strip remaining tags
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/\r\n/g, "\n")          // normalise CRLF → LF
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map(l => l.trim())              // trim each line individually
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")     // collapse 3+ blank lines to 2
+    .trim();
+}
+
+/** Pick a named field from a block of key:value lines, e.g. "Status: Attended" */
+function field(text: string, key: string): string | null {
+  const re = new RegExp(`^${key}\\s*:\\s*(.+)$`, "im");
+  return text.match(re)?.[1]?.trim() ?? null;
 }
 
 function safeFloat(s: string | null | undefined): number | null {
-    if (s == null || s === "") return null;
-    const n = parseFloat(s);
-    return isNaN(n) ? null : n;
+  if (!s || s.trim() === "" || s.trim() === "-") return null;
+  const n = parseFloat(s.replace(/[^0-9.]/g, ""));
+  return isNaN(n) ? null : n;
+}
+
+function overallPercent(courses: AttendanceCourse[]): number | null {
+  const valid = courses.filter(c => c.attended !== null && c.total);
+  if (!valid.length) return null;
+  const a = valid.reduce((s, c) => s + (c.attended ?? 0), 0);
+  const t = valid.reduce((s, c) => s + (c.total    ?? 0), 0);
+  return t ? Math.round((a / t) * 1000) / 10 : null;
+}
+
+function extractProfile(html: string): AttendanceProfile | null {
+  const text      = innerText(html);
+  const idMatch   = text.match(/Student ID\s*:\s*([A-Z0-9]+)/i);
+  const nameMatch = text.match(/Name\s*:\s*([^\n]+)/i);
+  const sessMatch = text.match(/Session\s*:\s*([0-9]+)/i);
+  if (!idMatch && !nameMatch) return null;
+  return {
+    studentId: idMatch?.[1]?.trim()   ?? null,
+    name:      nameMatch?.[1]?.trim() ?? null,
+    session:   sessMatch?.[1]?.trim() ?? null,
+  };
+}
+
+/**
+ * Parse the <div class="content"> inner HTML into AttendanceRecord[].
+ * Each session starts with "Class Datetime:" — we split on that keyword.
+ */
+function parseContentBlock(contentHtml: string): AttendanceRecord[] {
+  const text = innerText(contentHtml);
+
+  // Split into individual session blocks on "Class Datetime:"
+  // Keep the delimiter by using a lookahead split
+  const blocks = text
+    .split(/(?=^Class Datetime:)/im)
+    .map(b => b.trim())
+    .filter(b => b.toLowerCase().startsWith("class datetime:"));
+
+  const records: AttendanceRecord[] = [];
+  for (const block of blocks) {
+    const classDatetime    = field(block, "Class Datetime");
+    if (!classDatetime) continue;
+
+    const recordedDatetime = field(block, "Recorded Datetime");
+    const recordedBy       = field(block, "Recorded By");
+    const type             = field(block, "Type");
+    const group            = field(block, "Group");
+    const classHours       = field(block, "Class Hours");
+    const statusLabel      = field(block, "Status") ?? "";
+    const statusCode = Object.entries(STATUS_LABELS)
+      .find(([, v]) => v.toLowerCase() === statusLabel.toLowerCase())?.[0] ?? null;
+
+    records.push({
+      recordedDatetime,
+      recordedByEmail:  null,
+      classDatetime,
+      type,
+      classHours,
+      group,
+      recordedByName:   recordedBy,
+      status:           statusCode,
+      statusLabel:      statusLabel || (statusCode ? (STATUS_LABELS[statusCode] ?? statusCode) : ""),
+    });
+  }
+  return records;
+}
+
+function parseHtml(html: string, courseFilter?: string): GetAttendanceResult {
+  const profile = extractProfile(html);
+  const courses: AttendanceCourse[] = [];
+
+  // Match each collapsible button + immediately following content div
+  // Button contains multiline <b>...</b>; content div contains the session records
+  const sectionRe = /<button[^>]*class="[^"]*collapsible[^"]*"[^>]*>([\s\S]*?)<\/button>\s*<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/gi;
+  let m: RegExpExecArray | null;
+
+  while ((m = sectionRe.exec(html)) !== null) {
+    const btnText     = innerText(m[1]);
+    const contentHtml = m[2];
+
+    // Parse button lines:
+    //   Course: UECS2033 - SOFTWARE PROJECT MANAGEMENT
+    //   Total Class Hours attended: 4.0
+    //   Total Class Hours: 4.0
+    //   Percent: 100
+    const courseRaw  = field(btnText, "Course");
+    if (!courseRaw) continue;
+
+    // Split "UECS2033 - SOFTWARE PROJECT MANAGEMENT" into code + name
+    const codeSplit  = courseRaw.match(/^([A-Z0-9]+)\s*-\s*(.+)$/);
+    const code       = codeSplit?.[1]?.trim() ?? courseRaw.trim();
+    const name       = codeSplit?.[2]?.trim() ?? courseRaw.trim();
+
+    const attended   = safeFloat(field(btnText, "Total Class Hours attended"));
+    const total      = safeFloat(field(btnText, "Total Class Hours"));
+    const pctRaw     = safeFloat(field(btnText, "Percent"));
+    const percent    =
+      pctRaw !== null ? pctRaw :
+      attended !== null && total ? Math.round((attended / total) * 100) : null;
+
+    const records = parseContentBlock(contentHtml);
+
+    courses.push({ code, name, attended, total, percent, records });
+  }
+
+  console.log(`[getAttendance] parseHtml found ${courses.length} courses`);
+  courses.forEach(c =>
+    console.log(`  → ${c.code} | ${c.name} | ${c.attended}/${c.total}h | ${c.percent}%`)
+  );
+
+  // Fallback: no collapsible sections found — return raw stripped text
+  if (courses.length === 0) {
+    const stripped = innerText(html).replace(/\n{3,}/g, "\n\n").trim().slice(0, 3000);
+    console.log(`[getAttendance] no courses parsed. Stripped (500):\n${stripped.slice(0, 500)}`);
+    return {
+      ok: true, no_record: false, profile, courses: [],
+      overallPercent: null,
+      message: stripped || "No content returned.",
+    };
+  }
+
+  // Apply optional course filter
+  const filtered = courseFilter
+    ? courses.filter(c =>
+        (c.code ?? "").toUpperCase().includes(courseFilter.toUpperCase()) ||
+        (c.name ?? "").toUpperCase().includes(courseFilter.toUpperCase()))
+    : courses;
+
+  return {
+    ok:             true,
+    no_record:      filtered.length === 0,
+    profile,
+    courses:        filtered,
+    overallPercent: overallPercent(courses),
+    message:        "OK",
+  };
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function errResult(message: string): GetAttendanceResult {
+  return {
+    ok:             false,
+    no_record:      false,
+    profile:        null,
+    courses:        [],
+    overallPercent: null,
+    message,
+  };
 }
