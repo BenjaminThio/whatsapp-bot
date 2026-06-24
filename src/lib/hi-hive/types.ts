@@ -75,6 +75,8 @@ export interface ScanQrResult {
   courseCode: string | null;
   /** The pre-check expiry prediction made before the network call */
   expiry: DecodedQr["expiry"] | null;
+  /** URL of the server's result image (Tick.png = success, Cross.png = failure) */
+  imageUrl: string | null;
   /** Stripped server response text */
   serverResponse: string | null;
 }

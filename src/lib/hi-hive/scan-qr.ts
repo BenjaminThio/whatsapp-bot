@@ -1,28 +1,31 @@
 /**
- * scanQr — mirrors scan_qr() from utar_attendance.py.
+ * scanQr — mirrors scan_qr() from utar_attendance.py (latest version).
  *
  * Two-step POST flow (confirmed from QR_ClassAttendance_Scanner.html):
  *
  *   Step 1 — establish UTAR web session
  *     POST SCAN_URL  { encryptedData: utarToken }
- *     → server sets a session cookie
+ *     → server sets a session cookie and identifies the student
  *
  *   Step 2 — submit the QR scan
  *     POST SCAN_URL  { qrMessage: rawQr + ":*:" + lat + ":*:" + lon + ":*:0",
- *                      encryptedData: "null" }
- *     → HTML response; parse for success / error / token-expired keywords
+ *                      encryptedData: utarToken }   ← real token, NOT "null"
+ *     → HTML response; extract handleCallback('...') from the JS, classify result
  *
- * The `utarToken` is either:
- *   a) stored as `utarEncryptedData` in creds.json, or
- *   b) auto-generated from `utarStudentId` + `userId` (email) + current time
- *      via generateEncryptedData() — mirrors utar_attendance.py get_token()
+ * GPS coordinates are REQUIRED. Without them the server silently returns the
+ * scanner page and ignores the QR (confirmed when "Allow location" was needed).
+ * Defaults to UTAR Sungai Long campus: lat=3.0543 lon=101.7297
  *
- * Env vars required:
- *   UTAR_SCAN_URL   — e.g. "https://www.hi-hive.com/UTAR/main.jsp"
+ * Token resolution (mirrors get_token()):
+ *   1. stored utarEncryptedData in creds.json
+ *   2. auto-generate from utarStudentId + userId (email) + current datetime
+ *
+ * Env var:
+ *   UTAR_SCAN_URL  — e.g. "https://www.hi-hive.com/UTAR/main.jsp"
  */
 
-import { loadCreds, DEFAULT_CREDS_PATH, AES_KEY, AES_IV } from "./creds.js";
-import { decodeQr } from "../old-hi-hive/decode-qr.js"; 
+import { loadCreds, AES_KEY, AES_IV } from "./creds.js";
+import { decodeQr } from "../old-hi-hive/decode-qr.js";
 import crypto from "crypto";
 import type { ScanQrResult, ScanStatus, DecodedQr } from "./types.js";
 
@@ -31,7 +34,11 @@ import type { ScanQrResult, ScanStatus, DecodedQr } from "./types.js";
 const QR_SEPARATOR   = ":*:";
 const VALID_QR_TYPES = ["E01", "Q01", "Q02", "LQR", "CTR"];
 
-const UA_BROWSER = {
+// UTAR Sungai Long campus GPS — required by the server
+const UTAR_LAT = "3.0543";
+const UTAR_LON = "101.7297";
+
+const UA_BROWSER: Record<string, string> = {
   "User-Agent":   "Mozilla/5.0 (Linux; Android 16; CPH2637) AppleWebKit/537.36 " +
                   "(KHTML, like Gecko) Chrome/125.0.0.0 Mobile Safari/537.36",
   "Accept":       "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -40,19 +47,6 @@ const UA_BROWSER = {
   "Referer":      "https://portal.utar.edu.my/stuIntranet/default.jsp",
 };
 
-// keyword lists mirrored from utar_attendance.py
-const SUCCESS_PATTERNS = [
-  "attendance is recorded", "attendance is taken",
-  "recorded on", "taken on", "successfully", "your attendance",
-];
-const ERROR_PATTERNS = [
-  "wrong datetime", "already", "expired", "invalid",
-  "error", "failed", "not found", "incorrect",
-];
-const TOKEN_EXPIRED_PATTERNS = [
-  "login", "session expired", "please login", "unauthorized",
-];
-
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export interface ScanQrOptions {
@@ -60,102 +54,100 @@ export interface ScanQrOptions {
   scanUrl?: string;
   /** Path to creds.json. Default: next to this file */
   credsPath?: string;
-  /** GPS coords appended to the qrMessage (optional) */
+  /** GPS coords to include in qrMessage. Defaults to UTAR Sungai Long. */
   coords?: { lat: string; lon: string };
 }
 
 /**
  * Submit a QR scan to mark UTAR attendance via the web portal.
- * Reads the UTAR token automatically from creds.json, auto-generating
- * it from utarStudentId + email if no stored token is found.
  *
  * @param rawQr   - Raw QR string e.g. "Q01:*:<encrypted_payload>"
  * @param options - Optional overrides
  */
 export async function scanQr(
+  userId: string,
   rawQr: string,
   options: ScanQrOptions = {}
-): Promise<ScanQrResult> {
-  const scanUrl   = options.scanUrl ?? process.env["UTAR_SCAN_URL"] ?? "";
-  const credsPath = options.credsPath ?? DEFAULT_CREDS_PATH;
-  const lat       = options.coords?.lat ?? "";
-  const lon       = options.coords?.lon ?? "";
+): Promise<ScanQrResult | undefined> {
+  const scanUrl   = options.scanUrl   ?? process.env["UTAR_SCAN_URL"] ?? "";
+  const lat       = options.coords?.lat ?? UTAR_LAT;
+  const lon       = options.coords?.lon ?? UTAR_LON;
 
   if (!scanUrl) {
-    return fail("network_error", "UTAR_SCAN_URL is not set. Pass scanUrl in options or set the env var.");
+    return fail("network_error",
+      "UTAR_SCAN_URL is not set. Pass scanUrl in options or set the env var.");
   }
 
-  // ── Offline pre-check (expiry prediction) ────────────────────────────────
+  // ── Validate QR type ──────────────────────────────────────────────────────
   rawQr = rawQr.trim();
-
-  const sepIdx = rawQr.indexOf(QR_SEPARATOR);
-  const qrType = sepIdx >= 0 ? rawQr.substring(0, sepIdx) : rawQr;
-
+  const qrType = rawQr.substring(0, rawQr.indexOf(QR_SEPARATOR));
   if (!VALID_QR_TYPES.includes(qrType)) {
-    return fail("invalid_qr", `Invalid QR type '${qrType}'. Expected one of: ${VALID_QR_TYPES.join(", ")}.`);
+    return fail("invalid_qr",
+      `Invalid QR type '${qrType}'. Expected one of: ${VALID_QR_TYPES.join(", ")}.`);
   }
 
-  let expiry: DecodedQr["expiry"] | null = null;
+  // ── Offline expiry pre-check ──────────────────────────────────────────────
+  let expiry:     DecodedQr["expiry"] | null = null;
   let courseCode: string | null = null;
-  const decodeResult = decodeQr(rawQr);
+  const decodeResult = decodeQr(userId, rawQr);
   if (decodeResult.ok) {
     expiry     = decodeResult.decoded.expiry;
     courseCode = decodeResult.decoded.info.courseCode ?? null;
   }
 
   // ── Resolve UTAR token ────────────────────────────────────────────────────
-  const creds = loadCreds(credsPath);
+  const creds = await loadCreds(userId);
   let utarToken: string;
 
-  if (creds.utarEncryptedData) {
-    utarToken = creds.utarEncryptedData;
-  } else if (creds.utarStudentId && creds.userId) {
-    // auto-generate from studentId + email + current datetime
-    // mirrors generate_encrypted_data() in utar_attendance.py
-    utarToken = generateEncryptedData(creds.utarStudentId, creds.userId);
+  if (creds === undefined) {
+    return undefined;
+  } else if (creds.encryptedData) {
+    utarToken = creds.encryptedData;
+  } else if (creds.id && creds.email) {
+    utarToken = generateEncryptedData(creds.id, creds.email);
   } else {
-    return fail(
-      "auth_error",
+    return fail("auth_error",
       "No UTAR token found. Add utarEncryptedData or utarStudentId to creds.json.",
-      courseCode, expiry
-    );
+      courseCode, expiry);
   }
 
-  // ── Step 1: establish session (POST encryptedData=token) ──────────────────
-  let cookies: string;
+  // ── Step 1: establish session ─────────────────────────────────────────────
+  let cookies = "";
   try {
     const r = await fetch(scanUrl, {
-      method:  "POST",
-      headers: UA_BROWSER,
-      body:    new URLSearchParams({ encryptedData: utarToken }),
+      method:   "POST",
+      headers:  UA_BROWSER,
+      body:     new URLSearchParams({ encryptedData: utarToken }),
       redirect: "follow",
     });
-    // grab Set-Cookie header(s) to carry into step 2
     cookies = r.headers.get("set-cookie") ?? "";
     if (!r.ok && r.status !== 302) {
-      return fail("auth_error", `Session establishment failed with HTTP ${r.status}.`, courseCode, expiry);
+      return fail("auth_error",
+        `Session establishment failed with HTTP ${r.status}.`, courseCode, expiry);
     }
   } catch (e) {
     return fail("network_error", `Session establishment failed: ${e}`, courseCode, expiry);
   }
 
   // ── Step 2: submit QR scan ────────────────────────────────────────────────
-  // message format from QR_ClassAttendance_Scanner.html line 419:
-  //   encryptedText + ":*:" + latitude + ":*:" + longitude + ":*:0"
+  // qrMessage format (from QR_ClassAttendance_Scanner.html line 419):
+  //   rawQr + ":*:" + lat + ":*:" + lon + ":*:0"
+  // GPS is REQUIRED — empty coords cause the server to silently return the scanner page
   const qrMessage = `${rawQr}${QR_SEPARATOR}${lat}${QR_SEPARATOR}${lon}${QR_SEPARATOR}0`;
+
+  const step2Headers: Record<string, string> = {
+    ...UA_BROWSER,
+    "Referer": scanUrl,
+  };
+  if (cookies) step2Headers["Cookie"] = cookies;
 
   let htmlBody: string;
   try {
-    const headers: Record<string, string> = {
-      ...UA_BROWSER,
-      "Referer": scanUrl,
-    };
-    if (cookies) headers["Cookie"] = cookies;
-
+    // Step 2 sends the REAL token (not "null") — confirmed from new utar_attendance.py
     const r = await fetch(scanUrl, {
-      method:  "POST",
-      headers,
-      body:    new URLSearchParams({ qrMessage, encryptedData: "null" }),
+      method:   "POST",
+      headers:  step2Headers,
+      body:     new URLSearchParams({ qrMessage, encryptedData: utarToken }),
       redirect: "follow",
     });
     htmlBody = await r.text();
@@ -163,117 +155,153 @@ export async function scanQr(
     return fail("network_error", `QR submission failed: ${e}`, courseCode, expiry);
   }
 
-  // ── Parse HTML response (mirrors keyword detection in utar_attendance.py) ─
-  const plainText = stripHtml(htmlBody);
-  return interpretHtml(plainText, courseCode, expiry);
+  // ── Parse response: extract handleCallback('...') from JS ─────────────────
+  // The server embeds results in a JS callback rather than plain HTML:
+  //   handleCallback('QR code has expired...')        → expired
+  //   handleCallback('Q01:*:...:*:...:*:0')           → success (flag=0)
+  //   handleCallback('Exception: Internal server..')  → server error
+  const cbMatch = htmlBody.match(/handleCallback\('([\s\S]*?)'\)/);
+  const cbData  = cbMatch ? cbMatch[1].replace(/\\'/g, "'") : "";
+  const cbLower = cbData.toLowerCase();
+
+  if (cbData) {
+    // Extract server result image URL (Tick.png = success, Cross.png = failure)
+    const imageUrl = extractImageUrl(cbData);
+
+    // Convert <br/> → newlines first, then strip tags for clean keyword matching
+    const cbLines = cbData
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<[^>]+>/g, "")
+      .split("\n").map((l: string) => l.trim()).filter(Boolean).join("\n");
+    const cbLower = cbLines.toLowerCase();
+
+    // Log always so issues are visible in terminal
+    console.log(`[scanQr] cbData (first 400): ${cbData.slice(0, 400)}`);
+
+    if (cbLower.includes("exception") || cbLower.includes("internal server error")) {
+      return {
+        ok: false, status: "auth_error",
+        message:
+          "Server error — the session may not be carrying student identity. " +
+          "Ensure id + email are set in your Firestore hi_hive document.",
+        courseCode: null, expiry, imageUrl, serverResponse: cbLines.slice(0, 500),
+      };
+    }
+
+    // All known success phrasings — "has been recorded" is the real server text
+    if (cbLower.includes("attendance is taken") ||
+        cbLower.includes("attendance is recorded") ||
+        cbLower.includes("attendance has been recorded")) {
+
+      // Extract per-line key:value fields embedded after the success message
+      const extract = (key: string) =>
+        cbLines.match(new RegExp("^" + key + "\\s*:\\s*(.+)$", "im"))?.[1]?.trim() ?? "";
+
+      const cc   = extract("Course Code");
+      const type = extract("Type");
+      const grp  = extract("Group");
+      const dt   = extract("Class Date/Time");
+      const hrs  = extract("Class Hour");
+
+      if (cc && !courseCode) courseCode = cc;
+
+      const details = cc
+        ? `Course: ${cc}  Type: ${type}  Group: ${grp}  Time: ${dt}  Hours: ${hrs}`
+        : "";
+
+      return {
+        ok: true, status: "marked",
+        message: details ? `Attendance recorded!\n${details}` : "Attendance recorded!",
+        courseCode: courseCode || cc || null,
+        expiry, imageUrl, serverResponse: cbLines.slice(0, 500),
+      };
+    }
+
+    if (cbLower.includes("already")) {
+      return {
+        ok: true, status: "marked",
+        message: "Attendance already recorded for this class.",
+        courseCode, expiry, imageUrl, serverResponse: cbLines.slice(0, 500),
+      };
+    }
+
+    if (cbLower.includes("expired") ||
+        cbLower.includes("inform your lecturer") ||
+        cbLower.includes("wrong datetime")) {
+      return {
+        ok: false, status: "rejected",
+        message: `QR expired or wrong datetime. ${cbLines.slice(0, 200)}`,
+        courseCode: null, expiry, imageUrl, serverResponse: cbLines.slice(0, 500),
+      };
+    }
+
+    // Any other non-QR server message
+    if (!cbData.startsWith("Q01") && !cbData.startsWith("E01")) {
+      return {
+        ok: false, status: "rejected",
+        message: `Server says: ${cbLines.slice(0, 200)}`,
+        courseCode: null, expiry, imageUrl, serverResponse: cbLines.slice(0, 500),
+      };
+    }
+  }
+
+  // ── Fallback: check stripped HTML text ────────────────────────────────────
+  const stripped = htmlBody
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const strLower = stripped.toLowerCase();
+
+  if (strLower.includes("scan hive") && stripped.length < 500) {
+    return {
+      ok: false, status: "scanner_page",
+      message:
+        "Server returned the scanner page. " +
+        "GPS coordinates may be wrong, or the QR window has passed.",
+      courseCode: null, expiry, imageUrl: null, serverResponse: stripped.slice(0, 500),
+    };
+  }
+
+  return {
+    ok: false, status: "unknown_flag",
+    message: "Result unclear — check serverResponse.",
+    courseCode: null, expiry, imageUrl: null, serverResponse: stripped.slice(0, 500),
+  };
 }
 
 // ─── Token generation (mirrors generate_encrypted_data) ───────────────────────
 
 /**
  * Auto-generate the UTAR encryptedData token from studentId + email + now.
- * Format: AES-128-CBC(studentId + "FFF" + email + "FFF" + datetime + "FFF")
+ * Format: AES-128-CBC( studentId + "FFF" + email + "FFF" + datetime + "FFF" )
  * Mirrors generate_encrypted_data() in utar_attendance.py exactly.
  */
-export function generateEncryptedData(studentId: string, email: string, loginTime?: string): string {
-  const ts        = loginTime ?? new Date().toISOString()
-    .replace("T", " ").replace(/\.\d+Z$/, "");          // "YYYY-MM-DD HH:MM:SS"
+export function generateEncryptedData(
+  studentId: string,
+  email: string,
+  loginTime?: string
+): string {
+  const ts = loginTime
+    ?? new Date().toISOString().replace("T", " ").replace(/\.\d+Z$/, "");
   const plaintext = `${studentId}FFF${email}FFF${ts}FFF`;
 
-  const keyBuf    = Buffer.from(AES_KEY, "utf-8");
-  const ivBuf     = Buffer.from(AES_IV,  "utf-8");
-  const cipher    = crypto.createCipheriv("aes-128-cbc", keyBuf, ivBuf);
+  const keyBuf = Buffer.from(AES_KEY, "utf-8");
+  const ivBuf  = Buffer.from(AES_IV,  "utf-8");
+  const cipher = crypto.createCipheriv("aes-128-cbc", keyBuf, ivBuf);
 
-  // PKCS7 pad to 16-byte block manually (same as Python's Crypto.Util.Padding.pad)
-  const data      = Buffer.from(plaintext, "ascii");
-  const padLen    = 16 - (data.length % 16);
-  const padded    = Buffer.concat([data, Buffer.alloc(padLen, padLen)]);
+  const data   = Buffer.from(plaintext, "ascii");
+  const padLen = 16 - (data.length % 16);
+  const padded = Buffer.concat([data, Buffer.alloc(padLen, padLen)]);
 
-  const encrypted = Buffer.concat([cipher.update(padded), cipher.final()]);
-  return encrypted.toString("base64");
+  return Buffer.concat([cipher.update(padded), cipher.final()]).toString("base64");
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-/** Strip HTML tags, collapse whitespace — mirrors BeautifulSoup get_text() */
-function stripHtml(html: string): string {
-  // remove script/style blocks entirely
-  let t = html.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, " ");
-  // remove remaining tags
-  t = t.replace(/<[^>]+>/g, " ");
-  // collapse whitespace
-  return t.replace(/\s+/g, " ").trim();
-}
-
-/**
- * Classify the stripped server text using the same keyword lists as
- * utar_attendance.py, and return a structured ScanQrResult.
- */
-function interpretHtml(
-  text: string,
-  courseCode: string | null,
-  expiry: DecodedQr["expiry"] | null
-): ScanQrResult {
-  if (!text) {
-    return fail("unreadable", "Empty response from server.", courseCode, expiry);
-  }
-
-  const tl = text.toLowerCase();
-
-  if (SUCCESS_PATTERNS.some(p => tl.includes(p))) {
-    return {
-      ok: true,
-      status: "marked",
-      message: "✅ Attendance recorded!",
-      courseCode,
-      expiry,
-      serverResponse: text.slice(0, 500),
-    };
-  }
-
-  if (TOKEN_EXPIRED_PATTERNS.some(p => tl.includes(p))) {
-    return {
-      ok: false,
-      status: "token_expired",
-      message:
-        "Session expired. Update utarEncryptedData in creds.json, " +
-        "or set utarStudentId so a new token can be auto-generated.",
-      courseCode: null,
-      expiry,
-      serverResponse: text.slice(0, 500),
-    };
-  }
-
-  if (ERROR_PATTERNS.some(p => tl.includes(p))) {
-    return {
-      ok: false,
-      status: "rejected",
-      message: "Server rejected the scan — wrong datetime / already taken / not enrolled.",
-      courseCode: null,
-      expiry,
-      serverResponse: text.slice(0, 500),
-    };
-  }
-
-  if (tl.includes("scan hive")) {
-    return {
-      ok: false,
-      status: "scanner_page",
-      message: "Server returned the scanner page. QR window may have passed, or the class hasn't started yet.",
-      courseCode: null,
-      expiry,
-      serverResponse: text.slice(0, 500),
-    };
-  }
-
-  return {
-    ok: false,
-    status: "unknown_flag",
-    message: "Result unclear — check serverResponse.",
-    courseCode: null,
-    expiry,
-    serverResponse: text.slice(0, 500),
-  };
+/** Extract the first <img src="..."> URL from the server's callback HTML, if any. */
+function extractImageUrl(cbData: string): string | null {
+  const m = cbData.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return m ? m[1] : null;
 }
 
 function fail(
@@ -282,5 +310,5 @@ function fail(
   courseCode: string | null = null,
   expiry: DecodedQr["expiry"] | null = null
 ): ScanQrResult {
-  return { ok: false, status, message, courseCode, expiry, serverResponse: null };
+  return { ok: false, status, message, courseCode, expiry, imageUrl: null, serverResponse: null };
 }

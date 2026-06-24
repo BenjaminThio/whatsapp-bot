@@ -121,11 +121,30 @@ function formatDecoded(decoded: DecodedQr, source: "image" | "text"): string {
 // ─── Sub-handlers ─────────────────────────────────────────────────────────────
 
 async function handleDecodeImage(sock: any, msg: WAMessage): Promise<void> {
-    const jid = msg.key.remoteJid!;
+    if (!msg.key.remoteJid) return;
+
+    let chatId: string = '';
+    let userId: string = '';
+
+    if (!msg.key.participant && msg.key.remoteJid.endsWith('@lid'))
+    {
+        chatId = msg.key.remoteJid;
+        userId = msg.key.remoteJid;
+    }
+    else if (msg.key.participant && msg.key.remoteJid.endsWith('@g.us'))
+    {
+        chatId = msg.key.remoteJid;
+        userId = msg.key.participant;
+    }
+    else
+    {
+        console.log('Unexpected result...');
+        return;
+    }
 
     const imageMessage = extractImageMessage(msg);
     if (!imageMessage) {
-        await sock.sendMessage(jid, {
+        await sock.sendMessage(chatId, {
             text:
                 "⚠️ *Usage:*\n" +
                 "• Send/reply to a QR image: `!decode`\n" +
@@ -135,20 +154,20 @@ async function handleDecodeImage(sock: any, msg: WAMessage): Promise<void> {
     }
 
     if (!imageMessage.url && !imageMessage.directPath) {
-        await sock.sendMessage(jid, {
+        await sock.sendMessage(chatId, {
             text: "⏳ WhatsApp is still processing this image. Please wait a moment and try again.",
         }, { quoted: msg });
         return;
     }
 
-    await sock.sendMessage(jid, { text: "⏳ Reading QR from image..." }, { quoted: msg });
+    await sock.sendMessage(chatId, { text: "⏳ Reading QR from image..." }, { quoted: msg });
 
     const buffer = await downloadImage(imageMessage);
     const extracted = await scanQR(buffer);
 
     // No QR detected at all
     if (!extracted) {
-        await sock.sendMessage(jid, {
+        await sock.sendMessage(chatId, {
             text: "❌ *No QR code detected in the image.*\nWhatsApp compression may have blurred it — try sending the original file.",
         }, { quoted: msg });
         return;
@@ -156,7 +175,7 @@ async function handleDecodeImage(sock: any, msg: WAMessage): Promise<void> {
 
     // QR found but it's not an attendance QR
     if (!isAttendanceQr(extracted)) {
-        await sock.sendMessage(jid, {
+        await sock.sendMessage(chatId, {
             text:
                 `⚠️ *QR code found, but it's not an attendance QR.*\n\n` +
                 `🔗 *Content:* \`${extracted}\`\n\n` +
@@ -166,33 +185,52 @@ async function handleDecodeImage(sock: any, msg: WAMessage): Promise<void> {
     }
 
     // Valid attendance QR — decode it
-    const result = decodeQr(extracted);
+    const result = decodeQr(userId, extracted);
 
     if (!result.ok) {
-        await sock.sendMessage(jid, {
+        await sock.sendMessage(chatId, {
             text: `❌ *Decode failed*\n${result.error}`,
         }, { quoted: msg });
         return;
     }
 
-    await sock.sendMessage(jid, {
+    await sock.sendMessage(chatId, {
         text: formatDecoded(result.decoded, "image"),
     }, { quoted: msg });
 }
 
 async function handleDecodeText(sock: any, msg: WAMessage, rawQr: string): Promise<void> {
-    const jid = msg.key.remoteJid!;
+    if (!msg.key.remoteJid) return;
 
-    const result = decodeQr(rawQr);
+    let chatId: string = '';
+    let userId: string = '';
+
+    if (!msg.key.participant && msg.key.remoteJid.endsWith('@lid'))
+    {
+        chatId = msg.key.remoteJid;
+        userId = msg.key.remoteJid;
+    }
+    else if (msg.key.participant && msg.key.remoteJid.endsWith('@g.us'))
+    {
+        chatId = msg.key.remoteJid;
+        userId = msg.key.participant;
+    }
+    else
+    {
+        console.log('Unexpected result...');
+        return;
+    }
+
+    const result = decodeQr(userId, rawQr);
 
     if (!result.ok) {
-        await sock.sendMessage(jid, {
+        await sock.sendMessage(chatId, {
             text: `❌ *Decode failed*\n${result.error}`,
         }, { quoted: msg });
         return;
     }
 
-    await sock.sendMessage(jid, {
+    await sock.sendMessage(chatId, {
         text: formatDecoded(result.decoded, "text"),
     }, { quoted: msg });
 }

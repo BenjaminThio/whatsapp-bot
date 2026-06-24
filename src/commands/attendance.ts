@@ -1,4 +1,4 @@
-import { WAMessage } from "@whiskeysockets/baileys";
+import { WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { Command } from "./_types.js";
 import { getAttendance } from "../lib/hi-hive/get-attendance.js";
 import type { GetAttendanceResult, AttendanceCourse } from "../lib/hi-hive/types.js";
@@ -121,28 +121,53 @@ function formatAttendance(result: GetAttendanceResult, courseFilter?: string): s
 
 // ─── Handler ──────────────────────────────────────────────────────────────────
 
-async function handleAttendance(sock: any, msg: WAMessage, text: string) {
+export async function handleAttendance(sock: WASocket, msg: WAMessage, text: string) {
   if (!msg.key.remoteJid) return;
-  const jid = msg.key.remoteJid;
+
+  let chatId: string = '';
+  let userId: string = '';
+
+  if (!msg.key.participant && msg.key.remoteJid.endsWith('@lid'))
+  {
+      chatId = msg.key.remoteJid;
+      userId = msg.key.remoteJid;
+  }
+  else if (msg.key.participant && msg.key.remoteJid.endsWith('@g.us'))
+  {
+      chatId = msg.key.remoteJid;
+      userId = msg.key.participant;
+  }
+  else
+  {
+      console.log('Unexpected result...');
+      return;
+  }
 
   const courseFilter = text.slice("!attendance".length).trim() || undefined;
 
-  await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
+  await sock.sendMessage(chatId, { react: { text: "⏳", key: msg.key } });
 
   try {
-    const result = await getAttendance({ courseCode: courseFilter });
+    const result = await getAttendance(userId, { courseCode: courseFilter });
+
+    if (result === undefined)
+    {
+      await sock.sendMessage(chatId, { text: 'Creds are not set. Please do !test for more info.' });
+      return;
+    }
+
     const reply  = formatAttendance(result, courseFilter);
 
-    await sock.sendMessage(jid, { text: reply }, { quoted: msg });
-    await sock.sendMessage(jid, {
+    await sock.sendMessage(chatId, { text: reply }, { quoted: msg });
+    await sock.sendMessage(chatId, {
       react: { text: result.ok && !result.no_record ? "✅" : "❌", key: msg.key },
     });
   } catch (err: any) {
     console.error("!attendance error:", err);
-    await sock.sendMessage(jid, {
+    await sock.sendMessage(chatId, {
       text: `❌ Unexpected error: ${err?.message ?? err}`,
     }, { quoted: msg });
-    await sock.sendMessage(jid, { react: { text: "❌", key: msg.key } });
+    await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
   }
 }
 

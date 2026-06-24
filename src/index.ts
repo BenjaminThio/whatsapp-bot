@@ -15,6 +15,7 @@ import { processMediaDownload } from "./commands/play.js";
 import { startBirthdayScheduler } from "./commands/birthday.js";
 import { activeSearches, savedPollMessages } from "./memory.js";
 import { startScheduleService } from "./commands/schedule.js";
+import { tryAutoScan } from "./lib/hi-hive/auto-scan.js";
 
 async function startBot() {
     await loadCommands();
@@ -98,6 +99,8 @@ async function startBot() {
                 await handlePollVote(sock, msg, messageBody, meId);
                 continue;
             }
+
+            // if (await tryAutoScan(sock, msg)) continue;
 
             /*
             COMMAND DISPATCH

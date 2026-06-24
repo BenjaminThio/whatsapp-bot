@@ -1,4 +1,4 @@
-import { WAMessage } from "@whiskeysockets/baileys";
+import { WAMessage, WASocket } from "@whiskeysockets/baileys";
 
 export interface Command {
     // Primary command name (e.g. "play" - invoked as "!play")
@@ -19,7 +19,7 @@ export interface Command {
     // The actual handler.
     // `text` is the full original message text including the "!command " prefix -
     // existing handlers all do their own slicing, so we keep that for compatibility.
-    handler: (sock: any, msg: WAMessage, text: string) => Promise<void> | void;
+    handler: (sock: WASocket, msg: WAMessage, text: string) => Promise<void> | void;
 }
 
 // Helper to check if a piece of text is invoking this command.

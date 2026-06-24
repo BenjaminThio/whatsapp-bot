@@ -13,7 +13,7 @@
  *   UTAR_REPORT_URL  — e.g. "https://www.hi-hive.com/UTAR/QRAttendanceReport.jsp"
  */
 
-import { loadCreds, DEFAULT_CREDS_PATH } from "./creds.js";
+import { loadCreds } from "./creds.js";
 import { generateEncryptedData } from "./scan-qr.js";
 import type {
   GetAttendanceResult,
@@ -48,24 +48,27 @@ export interface GetAttendanceOptions {
 }
 
 export async function getAttendance(
+  userId: string,
   options: GetAttendanceOptions = {}
-): Promise<GetAttendanceResult> {
+): Promise<GetAttendanceResult | undefined> {
   const scanUrl   = options.scanUrl   ?? process.env["UTAR_SCAN_URL"]   ?? "";
   const reportUrl = options.reportUrl ?? process.env["UTAR_REPORT_URL"] ?? "";
-  const credsPath = options.credsPath ?? DEFAULT_CREDS_PATH;
 
   if (!scanUrl || !reportUrl) {
     return errResult("UTAR_SCAN_URL and UTAR_REPORT_URL must be set.");
   }
 
   // ── Resolve token ─────────────────────────────────────────────────────────
-  const creds = loadCreds(credsPath);
+  const creds = await loadCreds(userId);
+
+  if (creds === undefined) return undefined;
+
   let utarToken: string;
 
-  if (creds.utarEncryptedData) {
-    utarToken = creds.utarEncryptedData;
-  } else if (creds.utarStudentId && creds.userId) {
-    utarToken = generateEncryptedData(creds.utarStudentId, creds.userId);
+  if (creds.encryptedData) {
+    utarToken = creds.encryptedData;
+  } else if (creds.id && creds.email) {
+    utarToken = generateEncryptedData(creds.id, creds.email);
   } else {
     return errResult(
       "No UTAR token. Add utarEncryptedData or utarStudentId to creds.json."

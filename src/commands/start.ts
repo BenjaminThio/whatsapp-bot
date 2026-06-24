@@ -1,7 +1,7 @@
-import { WAMessage } from "@whiskeysockets/baileys";
+import { WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { Command } from "./_types.js";
 
-async function handleStart(sock: any, msg: WAMessage, _text: string) {
+async function handleStart(sock: WASocket, msg: WAMessage, _text: string) {
     if (!msg.key.remoteJid) return;
     await sock.sendMessage(msg.key.remoteJid, { text: "Hello Mum!" });
 }

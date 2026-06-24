@@ -8,7 +8,7 @@
  *   4. Runs the offline expiry prediction (predict_expiry)
  *   5. Returns everything as structured data
  */
-import { loadCreds, DEFAULT_CREDS_PATH } from "../hi-hive/creds.js";
+import { AES_IV, AES_KEY, loadCreds } from "../hi-hive/creds.js";
 import { aesDecrypt } from "./crypto.js";
 import type { DecodeQrResult, DecodeQrError, DecodedQr, QrInfo } from "../hi-hive/types.js";
 
@@ -25,9 +25,10 @@ const VALID_QR_TYPES = ["E01", "Q01", "Q02", "LQR", "CTR"];
  * @param credsPath - Path to creds.json (default: "creds.json")
  */
 export function decodeQr(
+    userId: string,
     rawQr: string,
 ): DecodeQrResult | DecodeQrError {
-    const creds = loadCreds(DEFAULT_CREDS_PATH);
+    const creds = loadCreds(userId);
 
     rawQr = rawQr.trim();
 
@@ -46,7 +47,7 @@ export function decodeQr(
     }
 
     // 3. AES-decrypt the payload
-    const decrypted = aesDecrypt(payload, creds.aes_key, creds.aes_iv);
+    const decrypted = aesDecrypt(payload, AES_KEY, AES_IV);
     if (decrypted === null) {
         return {
             ok: false,
