@@ -177,11 +177,13 @@ async function handleQuery(sock: any, msg: WAMessage, _text: string) {
 
         // Append a tiny footer showing which model answered (only when it wasn't
         // the primary, so you know a fallback kicked in)
+        /*
         const footer = model.startsWith("Gemini 2.5 Flash") && !model.includes("Lite")
             ? ""
             : `\n\n_⚡ via ${model}_`;
+        */
 
-        await sock.sendMessage(msg.key.remoteJid, { text: aiAnswer + footer }, { quoted: msg });
+        await sock.sendMessage(msg.key.remoteJid, { text: aiAnswer /* + footer */ }, { quoted: msg });
 
     } catch (error: any) {
         console.error("AI fallback error:", error);

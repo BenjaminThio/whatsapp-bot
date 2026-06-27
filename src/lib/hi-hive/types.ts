@@ -81,6 +81,11 @@ export interface ScanQrResult {
   serverResponse: string | null;
 }
 
+export interface SimpleScanQrResult {
+  status?: ScanStatus,
+  datetime: Date
+}
+
 // ─── refreshToken ────────────────────────────────────────────────────────────
 
 export interface RefreshTokenResult {

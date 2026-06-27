@@ -16,6 +16,7 @@ import { startBirthdayScheduler } from "./commands/birthday.js";
 import { activeSearches, savedPollMessages } from "./memory.js";
 import { startScheduleService } from "./commands/schedule.js";
 import { tryAutoScan } from "./lib/hi-hive/auto-scan.js";
+import { startWebhookQueue } from "./lib/webhook/webhook-queue.js";
 
 async function startBot() {
     await loadCommands();
@@ -76,6 +77,7 @@ async function startBot() {
             console.log("🟢 Bot is online and ready!");
             startBirthdayScheduler(sock);
             startScheduleService(sock);
+            startWebhookQueue(sock);
         }
     });
 
@@ -100,7 +102,7 @@ async function startBot() {
                 continue;
             }
 
-            // if (await tryAutoScan(sock, msg)) continue;
+            if (await tryAutoScan(sock, msg)) continue;
 
             /*
             COMMAND DISPATCH

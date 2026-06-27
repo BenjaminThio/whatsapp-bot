@@ -59,21 +59,20 @@ export async function getAttendance(
   }
 
   // ── Resolve token ─────────────────────────────────────────────────────────
+  // Always generate fresh from id + email + current datetime — never use stored token.
+  // Formula: AES-128-CBC( studentId + "FFF" + email + "FFF" + datetime + "FFF" )
   const creds = await loadCreds(userId);
 
   if (creds === undefined) return undefined;
 
-  let utarToken: string;
-
-  if (creds.encryptedData) {
-    utarToken = creds.encryptedData;
-  } else if (creds.id && creds.email) {
-    utarToken = generateEncryptedData(creds.id, creds.email);
-  } else {
+  if (!creds.id || !creds.email) {
     return errResult(
-      "No UTAR token. Add utarEncryptedData or utarStudentId to creds.json."
+      "Missing id or email in Firestore hi_hive document. Both are required to generate a token."
     );
   }
+
+  const utarToken = generateEncryptedData(creds.id, creds.email);
+  console.log(`[getAttendance] Generated fresh token for ${creds.id} / ${creds.email}`);
 
   // ── Step 1: establish session ─────────────────────────────────────────────
   let cookies = "";

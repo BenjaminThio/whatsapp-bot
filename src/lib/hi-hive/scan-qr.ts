@@ -65,7 +65,7 @@ export interface ScanQrOptions {
  * @param options - Optional overrides
  */
 export async function scanQr(
-  userId: string,
+  docId: string,
   rawQr: string,
   options: ScanQrOptions = {}
 ): Promise<ScanQrResult | undefined> {
@@ -89,27 +89,28 @@ export async function scanQr(
   // ── Offline expiry pre-check ──────────────────────────────────────────────
   let expiry:     DecodedQr["expiry"] | null = null;
   let courseCode: string | null = null;
-  const decodeResult = decodeQr(userId, rawQr);
+  const decodeResult = decodeQr(docId, rawQr);
   if (decodeResult.ok) {
     expiry     = decodeResult.decoded.expiry;
     courseCode = decodeResult.decoded.info.courseCode ?? null;
   }
 
   // ── Resolve UTAR token ────────────────────────────────────────────────────
-  const creds = await loadCreds(userId);
-  let utarToken: string;
+  // Always generate a fresh token in real-time from id + email + current datetime.
+  // Formula: AES-128-CBC( studentId + "FFF" + email + "FFF" + datetime + "FFF" )
+  // A stale stored token causes "Invalid QR code" — fresh is always correct.
+  const creds = await loadCreds(docId);
 
-  if (creds === undefined) {
-    return undefined;
-  } else if (creds.encryptedData) {
-    utarToken = creds.encryptedData;
-  } else if (creds.id && creds.email) {
-    utarToken = generateEncryptedData(creds.id, creds.email);
-  } else {
+  if (creds === undefined) return undefined;
+
+  if (!creds.id || !creds.email) {
     return fail("auth_error",
-      "No UTAR token found. Add utarEncryptedData or utarStudentId to creds.json.",
+      "Missing id or email in Firestore hi_hive document. Both are required to generate a token.",
       courseCode, expiry);
   }
+
+  const utarToken = generateEncryptedData(creds.id, creds.email);
+  console.log(`[scanQr] Generated fresh token for ${creds.id} / ${creds.email}`);
 
   // ── Step 1: establish session ─────────────────────────────────────────────
   let cookies = "";
@@ -294,6 +295,38 @@ export function generateEncryptedData(
   const padded = Buffer.concat([data, Buffer.alloc(padLen, padLen)]);
 
   return Buffer.concat([cipher.update(padded), cipher.final()]).toString("base64");
+}
+
+export function decryptData(encryptedBase64: string): { studentId: string; email: string; loginTime: string } {
+  // 1. Recreate the Key and IV buffers exactly as done in encryption
+  const keyBuf = Buffer.from(AES_KEY, "utf-8");
+  const ivBuf  = Buffer.from(AES_IV,  "utf-8");
+
+  // 2. Initialize the Decipher
+  const decipher = crypto.createDecipheriv("aes-128-cbc", keyBuf, ivBuf);
+
+  // 3. Decrypt the Base64 string back into a Buffer
+  const decryptedBuf = Buffer.concat([
+    decipher.update(encryptedBase64, "base64"),
+    decipher.final()
+  ]);
+
+  // 4. Remove the manual padding that was added during encryption
+  // The last byte of the buffer contains the number of padding bytes added.
+  const padLen = decryptedBuf[decryptedBuf.length - 1];
+  const unpaddedBuf = decryptedBuf.subarray(0, decryptedBuf.length - padLen);
+
+  // 5. Convert the unpadded Buffer back to an ASCII string
+  const plaintext = unpaddedBuf.toString("ascii");
+
+  // 6. Split the string by your 'FFF' delimiter
+  const parts = plaintext.split("FFF");
+
+  return {
+    studentId: parts[0] || "",
+    email: parts[1] || "",
+    loginTime: parts[2] || ""
+  };
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

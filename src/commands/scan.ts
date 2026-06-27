@@ -75,7 +75,7 @@ function extractImageMessage(msg: WAMessage): any | null {
 /*
   Download the image from a WhatsApp imageMessage and return it as a Buffer.
 */
-async function downloadImage(imageMessage: any, msg: WAMessage): Promise<Buffer> {
+async function downloadImage(imageMessage: any, _msg: WAMessage): Promise<Buffer> {
     const stream = await downloadContentFromMessage(imageMessage, "image");
     let buffer = Buffer.from([]);
     for await (const chunk of stream) {
@@ -201,28 +201,7 @@ async function handleScanImage(sock: any, msg: WAMessage): Promise<void> {
   !scan attendance               — extract QR from replied image, then submit to attendance API
   !scan attendance <raw_qr>      — submit raw QR string directly to attendance API
 */
-async function handleScanAttendance(sock: WASocket, msg: WAMessage, rawQrArg: string): Promise<void> {
-    if (!msg.key.remoteJid) return;
-
-    let chatId: string = '';
-    let userId: string = '';
-
-    if (!msg.key.participant && msg.key.remoteJid.endsWith('@lid'))
-    {
-        chatId = msg.key.remoteJid;
-        userId = msg.key.remoteJid;
-    }
-    else if (msg.key.participant && msg.key.remoteJid.endsWith('@g.us'))
-    {
-        chatId = msg.key.remoteJid;
-        userId = msg.key.participant;
-    }
-    else
-    {
-        console.log('Unexpected result...');
-        return;
-    }
-
+export async function handleScanAttendance(sock: WASocket, msg: WAMessage, chatId: string, userId: string, rawQrArg: string | undefined): Promise<void> {
     let rawQr: string;
 
     if (rawQrArg) {
@@ -309,6 +288,25 @@ async function handleScanAttendance(sock: WASocket, msg: WAMessage, rawQrArg: st
 async function handleScan(sock: any, msg: WAMessage, text: string): Promise<void> {
     if (!msg.key.remoteJid) return;
 
+    let chatId: string = '';
+    let userId: string = '';
+
+    if (!msg.key.participant && msg.key.remoteJid.endsWith('@lid'))
+    {
+        chatId = msg.key.remoteJid;
+        userId = msg.key.remoteJid;
+    }
+    else if (msg.key.participant && msg.key.remoteJid.endsWith('@g.us'))
+    {
+        chatId = msg.key.remoteJid;
+        userId = msg.key.participant;
+    }
+    else
+    {
+        console.log('Unexpected result...');
+        return;
+    }
+
     // Everything after "!scan" — e.g. "", "attendance", "attendance Q01:*:abc..."
     const args = text.slice("!scan".length).trim();
 
@@ -316,7 +314,7 @@ async function handleScan(sock: any, msg: WAMessage, text: string): Promise<void
     if (args.toLowerCase().startsWith("attendance")) {
         const rawQrArg = args.slice("attendance".length).trim();
         try {
-            await handleScanAttendance(sock, msg, rawQrArg);
+            await handleScanAttendance(sock, msg, chatId, userId, rawQrArg);
         } catch (err: any) {
             console.error("!scan attendance error:", err);
             await sock.sendMessage(msg.key.remoteJid, {

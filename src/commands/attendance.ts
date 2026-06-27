@@ -57,7 +57,7 @@ function formatCourse(c: AttendanceCourse): string {
   return lines.join("\n");
 }
 
-function formatAttendance(result: GetAttendanceResult, courseFilter?: string): string {
+export function formatAttendance(result: GetAttendanceResult, courseFilter?: string): string {
   // ── Error states ──────────────────────────────────────────────────────────
   if (!result.ok) {
     return (

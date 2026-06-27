@@ -5,7 +5,8 @@
 import { WAMessage, WASocket, downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { readBarcodes } from "zxing-wasm";
 import { scanQr } from "./scan-qr.js";
-import type { ScanQrResult } from "./types.js";
+import type { ScanQrResult, SimpleScanQrResult } from "./types.js";
+import { getAllDocs } from "./creds.js";
 
 const VALID_QR_TYPES = ["Q01", "Q02", "E01", "LQR", "CTR"];
 const QR_SEPARATOR   = ":*:";
@@ -142,37 +143,84 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     console.log(`[autoScan] ✅ valid attendance QR — submitting for userId=${userId}`);
     await sock.sendMessage(chatId, { react: { text: "⏳", key: msg.key } });
 
-    const result = await scanQr(userId, extracted);
+    const results: [string, SimpleScanQrResult][] = [];
 
-    if (result === undefined) {
-      await sock.sendMessage(chatId, {
-        text: "⚠️ *Auto-scan:* Creds not set. Please configure your hi_hive Firestore document.",
-      }, { quoted: msg });
-      await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
-      return true;
-    }
+    for (const [_docId, creds] of Object.entries(await getAllDocs()))
+    {
+      const result: ScanQrResult | undefined = await scanQr(userId, extracted);
 
-    const caption  = formatResult(result);
-    const imageUrl = (result as any).imageUrl as string | null;
+      results.push([creds.hidden ? '*'.repeat(creds.id.length) : creds.id, {
+        status: result?.status,
+        datetime: new Date()
+      }]);
 
-    if (imageUrl) {
-      try {
-        const imgRes = await fetch(imageUrl);
-        const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+      if (result === undefined)
+      {
+        console.log(`⚠️ [autoScan]: Document with ID \`${creds.id}\` is likely corrupted.`)
+        continue;
+      }
+      else
+      {
+        console.log(`[autoScan]: Scanning for attendance \`${creds.id}\` done!`);
+        continue;
+      }
+      /*
+      if (result === undefined) {
         await sock.sendMessage(chatId, {
-          image: imgBuf, caption, mimetype: "image/png",
+          text: "⚠️ *Auto-scan:* Creds not set. Please configure your hi_hive Firestore document.",
         }, { quoted: msg });
-      } catch {
+        await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
+        return true;
+      }
+
+      const caption  = formatResult(result);
+      const imageUrl = (result as any).imageUrl as string | null;
+
+      if (imageUrl) {
+        try {
+          const imgRes = await fetch(imageUrl);
+          const imgBuf = Buffer.from(await imgRes.arrayBuffer());
+          await sock.sendMessage(chatId, {
+            image: imgBuf, caption, mimetype: "image/png",
+          }, { quoted: msg });
+        } catch {
+          await sock.sendMessage(chatId, { text: caption }, { quoted: msg });
+        }
+      } else {
         await sock.sendMessage(chatId, { text: caption }, { quoted: msg });
       }
-    } else {
-      await sock.sendMessage(chatId, { text: caption }, { quoted: msg });
+
+      await sock.sendMessage(chatId, {
+        react: { text: result.ok ? "✅" : "❌", key: msg.key },
+      });
+      */
     }
 
-    await sock.sendMessage(chatId, {
-      react: { text: result.ok ? "✅" : "❌", key: msg.key },
+    
+    // Optional helper function to format the time nicely (e.g., "14:30:05")
+    const formatTime = (date: Date) => {
+        return date.toLocaleTimeString('en-US', { hour12: false });
+    };
+
+    const reportLines = results.map(([studentId, result]: [string, SimpleScanQrResult]) => {
+        const time = formatTime(result.datetime);
+
+        if (result.status === undefined) {
+            return `❌ *[${time}]* \`${studentId}\` ➔ _Failed to scan_`;
+        } else {
+            return `${result.status === 'marked' ? '✅' : '❌'} *[${time}]* \`${studentId}\` ➔ *Status:* \`${result.status}\``;
+        }
     });
 
+    const finalMessage = `📋 *AUTO SCAN REPORT*\n\n${reportLines.join('\n')}\n\n🏁 *Completed at:* \`${formatTime(new Date())}\``;
+
+    await sock.sendMessage(chatId, { 
+        text: finalMessage 
+    }, { quoted: msg });
+
+    await sock.sendMessage(chatId, { 
+        react: { text: "✅", key: msg.key } 
+    });
     return true;
 
   } catch (err) {
