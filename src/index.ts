@@ -17,8 +17,10 @@ import { activeSearches, savedPollMessages } from "./memory.js";
 import { startScheduleService } from "./commands/schedule.js";
 import { tryAutoScan } from "./lib/hi-hive/auto-scan.js";
 import { startWebhookQueue } from "./lib/webhook/webhook-queue.js";
+import { ensureSchema } from "./db/index.js";
 
 async function startBot() {
+    await ensureSchema();
     await loadCommands();
 
     const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");

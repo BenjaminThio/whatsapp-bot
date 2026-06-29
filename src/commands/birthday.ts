@@ -1,6 +1,5 @@
-import { FieldValue } from "firebase-admin/firestore";
 import { WAMessage } from "@whiskeysockets/baileys";
-import db from "../firebase.js";
+import { birthdaysOnDate, saveBirthday, setRemindYear } from "../lib/birthday-db.js";
 import { Command } from "./_types.js";
 import { parseFlexibleDate, formatDate, toDayMonthKey } from "../utils/date.js";
 
@@ -16,12 +15,11 @@ export async function startBirthdayScheduler(sock: any) {
             const currentYear = today.getFullYear();
             const todayKey = `${day}/${month}`;
 
-            const snapshot = await db.collection("birthdays").where("date", "==", todayKey).get();
-            if (snapshot.empty) return;
+            const records = await birthdaysOnDate(todayKey);
+            if (records.length === 0) return;
 
-            for (const doc of snapshot.docs) {
-                const record = doc.data();
-                const docId = doc.id;
+            for (const record of records) {
+                const docId = record.docId;
 
                 // Skip if already wished this year
                 if (record.remindYear === currentYear) continue;
@@ -39,7 +37,7 @@ export async function startBirthdayScheduler(sock: any) {
                     text: `🎂🎈 *CLOUD BIRTHDAY REMINDER* 🎈🎂\n\nToday is *${record.name}*'s special day!${ageLine}\n\nLet's wish them an amazing day ahead! 🎉✨`
                 });
 
-                await db.collection("birthdays").doc(docId).update({ remindYear: currentYear });
+                await setRemindYear(docId, currentYear);
             }
         } catch (err) {
             console.error("Error running Firebase schedule check:", err);
@@ -74,14 +72,13 @@ async function handleBirthday(sock: any, msg: WAMessage, text: string) {
     try {
         const docId = `${msg.key.remoteJid}_${targetName}`.replace(/\s+/g, '_');
 
-        await db.collection("birthdays").doc(docId).set({
+        await saveBirthday({
+            docId,
             name: targetName,
             date: toDayMonthKey(parsed),         // "DD/MM" - used by scheduler match
             birthYear: parsed.year ?? null,      // null if user omitted year
             jid: msg.key.remoteJid,
-            remindYear: FieldValue.increment(0),
-            updatedAt: FieldValue.serverTimestamp()
-        }, { merge: true });
+        });
 
         const yearNote = parsed.year !== null
             ? `\n🎂 *Year:* ${parsed.year}`

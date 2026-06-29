@@ -1,6 +1,8 @@
 import { WAMessage } from "@whiskeysockets/baileys";
-import { FieldValue } from "firebase-admin/firestore";
-import db from "../firebase.js";
+import {
+    dueReminders, pendingForChat, pendingCount, markFired,
+    insertReminder, insertMany, newId, type ScheduleRow,
+} from "../lib/schedules-db.js";
 import { Command } from "./_types.js";
 import { parseDateTime, formatDateTime } from "../utils/datetime.js";
 
@@ -112,18 +114,9 @@ function computeAutoMilestones(runwayMs: number): Milestone[] {
 // Valid level names for the flag (the fixed ones plus "auto")
 const VALID_LEVELS = [...Object.keys(ESCALATION_LEVELS), "auto"];
 
-interface ScheduleDoc {
-    jid: string;
-    activity: string;
-    fireAt: number;        // epoch ms
-    requester: string;
-    fired: boolean;
-    createdAt?: unknown;
-    // ── Escalation fields (optional — absent on plain one-shot reminders) ──
-    groupId?: string;        // shared across all milestones of one --escalate reminder
-    deadlineAt?: number;     // the actual deadline (same for every milestone in a group)
-    milestoneLabel?: string; // e.g. "1 day left"
-}
+// Reminder shape used throughout this file. Matches ScheduleRow from schedules-db,
+// but groupId/deadlineAt/milestoneLabel may be null for plain one-shot reminders.
+type ScheduleDoc = ScheduleRow;
 
 // IDs that already have an in-memory timer armed, to prevent double-firing
 const armed = new Set<string>();
@@ -131,7 +124,7 @@ const armed = new Set<string>();
 async function fireReminder(sock: any, id: string, data: ScheduleDoc, overdueMs = 0) {
     try {
         // Mark fired FIRST so a crash mid-send can't cause a double fire on restart
-        await db.collection(COLLECTION).doc(id).update({ fired: true });
+        await markFired(id);
 
         const overdueNote = overdueMs > 60_000
             ? `\n\n_⚠️ This reminder is ${Math.round(overdueMs / 60_000)} min overdue (bot was offline)._`
@@ -182,22 +175,18 @@ export function startScheduleService(sock: any) {
         try {
             const now = Date.now();
             // Everything unfired that is due within the arming window (or overdue)
-            const snapshot = await db.collection(COLLECTION)
-                .where("fired", "==", false)
-                .where("fireAt", "<=", now + ARM_WINDOW_MS)
-                .get();
+            const due = await dueReminders(now + ARM_WINDOW_MS);
 
-            for (const doc of snapshot.docs) {
-                if (armed.has(doc.id)) continue;
-                const data = doc.data() as ScheduleDoc;
-                armed.add(doc.id);
+            for (const data of due) {
+                if (armed.has(data.id)) continue;
+                armed.add(data.id);
 
                 const delay = data.fireAt - Date.now();
                 if (delay <= 0) {
                     // Overdue (missed while offline, or just hit) - fire now
-                    void fireReminder(sock, doc.id, data, -delay);
+                    void fireReminder(sock, data.id, data, -delay);
                 } else {
-                    setTimeout(() => void fireReminder(sock, doc.id, data), delay);
+                    setTimeout(() => void fireReminder(sock, data.id, data), delay);
                 }
             }
         } catch (err) {
@@ -211,18 +200,14 @@ export function startScheduleService(sock: any) {
 
 // Subcommand: list
 async function listSchedules(sock: any, msg: WAMessage) {
-    const snapshot = await db.collection(COLLECTION)
-        .where("jid", "==", msg.key.remoteJid)
-        .where("fired", "==", false)
-        .get();
+    const all = await pendingForChat(msg.key.remoteJid!);
 
-    if (snapshot.empty) {
+    if (all.length === 0) {
         await sock.sendMessage(msg.key.remoteJid!, { text: "📭 No pending reminders in this chat." }, { quoted: msg });
         return;
     }
 
-    type ScheduleWithId = ScheduleDoc & { id: string };
-    const all: ScheduleWithId[] = snapshot.docs.map((d: any) => ({ id: d.id, ...(d.data() as ScheduleDoc) }));
+    type ScheduleWithId = ScheduleRow;
 
     // Split into plain one-shots and escalation groups
     const oneShots = all.filter((it: ScheduleWithId) => !it.groupId);
@@ -268,13 +253,8 @@ async function listSchedules(sock: any, msg: WAMessage) {
 
 // Subcommand: cancel
 async function cancelSchedule(sock: any, msg: WAMessage, idPrefix: string) {
-    const snapshot = await db.collection(COLLECTION)
-        .where("jid", "==", msg.key.remoteJid)
-        .where("fired", "==", false)
-        .get();
-
-    type ScheduleWithId = ScheduleDoc & { id: string };
-    const docs: ScheduleWithId[] = snapshot.docs.map((d: any) => ({ id: d.id, ...(d.data() as ScheduleDoc) }));
+    type ScheduleWithId = ScheduleRow;
+    const docs = await pendingForChat(msg.key.remoteJid!);
 
     // Match either a group (by groupId prefix) or a single doc (by doc id prefix)
     const groupMatches = docs.filter((d: ScheduleWithId) => d.groupId && d.groupId.startsWith(idPrefix));
@@ -283,7 +263,7 @@ async function cancelSchedule(sock: any, msg: WAMessage, idPrefix: string) {
     if (groupMatches.length > 0) {
         // Cancel every remaining milestone in the escalation group
         for (const d of groupMatches) {
-            await db.collection(COLLECTION).doc(d.id).update({ fired: true });
+            await markFired(d.id);
             armed.delete(d.id);
         }
         await sock.sendMessage(msg.key.remoteJid!, {
@@ -296,7 +276,7 @@ async function cancelSchedule(sock: any, msg: WAMessage, idPrefix: string) {
     }
 
     if (docMatch) {
-        await db.collection(COLLECTION).doc(docMatch.id).update({ fired: true });
+        await markFired(docMatch.id);
         armed.delete(docMatch.id);
         await sock.sendMessage(msg.key.remoteJid!, {
             text: `🗑️ Cancelled reminder \`${docMatch.id.slice(0, 6)}\`\n📌 ${docMatch.activity}`
@@ -408,10 +388,7 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
 
     // Cap pending reminders per chat (count groups as 1 toward the cap visually,
     // but each doc still counts — so check against the raw doc count + what we'd add)
-    const pending = await db.collection(COLLECTION)
-        .where("jid", "==", msg.key.remoteJid)
-        .where("fired", "==", false)
-        .get();
+    const pendingTotal = await pendingCount(msg.key.remoteJid);
 
     // ── Escalating reminder: expand into one doc per future milestone ─────────
     if (escalate) {
@@ -432,7 +409,7 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
             milestones.push({ fireAt: deadline, label: "Now / due" });
         }
 
-        if (pending.size + milestones.length > MAX_PER_CHAT) {
+        if (pendingTotal + milestones.length > MAX_PER_CHAT) {
             await sock.sendMessage(msg.key.remoteJid, {
                 text:
                     `❌ This escalating reminder needs ${milestones.length} slots but the chat ` +
@@ -441,29 +418,22 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
             return;
         }
 
-        // Shared group id = the Firestore id of the FIRST milestone doc
-        const firstRef = db.collection(COLLECTION).doc();
-        const groupId = firstRef.id;
+        // Shared group id = the id of the FIRST milestone row
+        const groupId = newId();
         const requester = msg.key.participant || msg.key.remoteJid;
 
-        const batch = db.batch();
-        let isFirst = true;
-        for (const m of milestones) {
-            const ref = isFirst ? firstRef : db.collection(COLLECTION).doc();
-            isFirst = false;
-            batch.set(ref, {
-                jid: msg.key.remoteJid,
-                activity,
-                fireAt: m.fireAt,
-                requester,
-                fired: false,
-                createdAt: FieldValue.serverTimestamp(),
-                groupId,
-                deadlineAt: deadline,
-                milestoneLabel: m.label,
-            } satisfies ScheduleDoc & { createdAt: unknown });
-        }
-        await batch.commit();
+        const rows: ScheduleRow[] = milestones.map((m, i) => ({
+            id:             i === 0 ? groupId : newId(),
+            jid:            msg.key.remoteJid!,
+            activity,
+            fireAt:         m.fireAt,
+            requester,
+            fired:          false,
+            groupId,
+            deadlineAt:     deadline,
+            milestoneLabel: m.label,
+        }));
+        await insertMany(rows);
 
         const pingTimes = milestones
             .map(m => `   • ${formatDateTime(m.fireAt)} _(${m.label})_`)
@@ -481,21 +451,25 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
     }
 
     // ── Plain one-shot reminder (unchanged) ──────────────────────────────────
-    if (pending.size >= MAX_PER_CHAT) {
+    if (pendingTotal >= MAX_PER_CHAT) {
         await sock.sendMessage(msg.key.remoteJid, {
             text: `❌ This chat already has ${MAX_PER_CHAT} pending reminders. Cancel some first.`
         }, { quoted: msg });
         return;
     }
 
-    const docRef = await db.collection(COLLECTION).add({
-        jid: msg.key.remoteJid,
+    const newReminderId = newId();
+    await insertReminder({
+        id:             newReminderId,
+        jid:            msg.key.remoteJid,
         activity,
-        fireAt: parsed.epochMs,
-        requester: msg.key.participant || msg.key.remoteJid,
-        fired: false,
-        createdAt: FieldValue.serverTimestamp(),
-    } satisfies ScheduleDoc & { createdAt: unknown });
+        fireAt:         parsed.epochMs,
+        requester:      msg.key.participant || msg.key.remoteJid,
+        fired:          false,
+        groupId:        null,
+        deadlineAt:     null,
+        milestoneLabel: null,
+    });
 
     const inMs = parsed.epochMs - now;
     const inHuman = inMs < 3_600_000
@@ -510,7 +484,7 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
             `📌 ${activity}\n` +
             `🕐 ${formatDateTime(parsed.epochMs)}\n` +
             `⏳ In about ${inHuman}\n` +
-            `🆔 \`${docRef.id.slice(0, 6)}\``
+            `🆔 \`${newReminderId.slice(0, 6)}\``
     }, { quoted: msg });
 }
 

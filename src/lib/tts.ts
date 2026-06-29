@@ -9,7 +9,7 @@
  * picks the right one automatically (see lib/subprocess.ts).
  */
 import path from "node:path";
-import db from "../firebase.js";
+import { getPrefs } from "./user-prefs-db.js";
 import { runHelper } from "./subprocess.js";
 
 // From src/lib/ : project root is ../.. ; the engine sources live in src/modules/
@@ -30,13 +30,11 @@ export function generateSpeech(text: string, lang: string): Promise<Buffer> {
     });
 }
 
-/** Get the user's preferred TTS language from Firestore. Defaults to "en". */
+/** Get the user's preferred TTS language from Postgres. Defaults to "en". */
 export async function getUserTtsLang(jid: string): Promise<string> {
     try {
-        const docSnap = await db.collection("user_prefs").doc(jid).get();
-        if (docSnap.exists && docSnap.data()?.ttsLang) {
-            return docSnap.data()!.ttsLang;
-        }
+        const prefs = await getPrefs(jid);
+        if (prefs?.ttsLang) return prefs.ttsLang;
     } catch (err) {
         console.error("Failed to fetch TTS lang, using default 'en':", err);
     }

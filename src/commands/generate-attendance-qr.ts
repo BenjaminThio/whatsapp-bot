@@ -113,7 +113,7 @@ async function buildQrImage(rawQrString: string): Promise<Buffer> {
         scale: 3,
         addQuietZones: true,
     });
-    const arrayBuffer = await result.image.arrayBuffer();
+    const arrayBuffer = await result.image!.arrayBuffer();
     return Buffer.from(arrayBuffer);
 }
 

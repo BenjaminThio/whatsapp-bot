@@ -1,5 +1,5 @@
 import { WAMessage } from "@whiskeysockets/baileys";
-import db from "../firebase.js";
+import { setPrefs } from "../lib/user-prefs-db.js";
 import { Command } from "./_types.js";
 
 // A mapped list of the most popular gTTS supported languages
@@ -102,11 +102,8 @@ async function handleLang(sock: any, msg: WAMessage, text: string) {
     }
 
     try {
-        // Save to Firestore[cite: 1]
-        // We use the chat ID (remoteJid) so settings apply per-group or per-DM
-        await db.collection("user_prefs").doc(msg.key.remoteJid).set({
-            ttsLang: requestedCode
-        }, { merge: true });
+        // Save per-chat (remoteJid) so settings apply per-group or per-DM
+        await setPrefs(msg.key.remoteJid, { ttsLang: requestedCode });
 
         await sock.sendMessage(msg.key.remoteJid, {
             text: `✅ Voice language successfully set to *${SUPPORTED_LANGS[requestedCode]}*!`
