@@ -1,14 +1,14 @@
 /**
- * github-webhook.ts — src/lib/webhook/github-webhook.ts
+ * github-webhook.ts - src/lib/webhook/github-webhook.ts
  *
  * Core store + verification for GitHub webhooks. Each webhook config is one
  * Firestore document in the `webhooks` collection, keyed by a random token.
  *
  * Security model (defense in depth):
- *   1. URL path token  → routes the request to a config, and is unguessable
- *                        (32 bytes of crypto randomness). No token = 404.
- *   2. HMAC-SHA256 sig  → GitHub signs every payload with the shared secret.
- *                        We recompute and compare. Wrong/missing sig = 401.
+ *   1. URL path token  => routes the request to a config, and is unguessable
+ *                         (32 bytes of crypto randomness). No token = 404.
+ *   2. HMAC-SHA256 sig => GitHub signs every payload with the shared secret.
+ *                         We recompute and compare. Wrong/missing sig = 401.
  *
  * So even if someone steals the URL (token), they cannot forge a valid
  * signature without the secret. And without the token they can't find the route.
@@ -42,20 +42,18 @@ export interface WebhookConfig {
   active:     boolean;
 }
 
-// ─── Token / secret generation ────────────────────────────────────────────────
-
-/** URL-safe random token for the webhook path (unguessable route). */
+// Token / secret generation
+// URL-safe random token for the webhook path (unguessable route).
 export function generateToken(): string {
   return crypto.randomBytes(24).toString("base64url");   // 32 chars, URL-safe
 }
 
-/** Strong random secret for GitHub's HMAC signing. */
+// Strong random secret for GitHub's HMAC signing.
 export function generateSecret(): string {
   return crypto.randomBytes(32).toString("hex");          // 64 hex chars
 }
 
-// ─── Firestore CRUD ───────────────────────────────────────────────────────────
-
+// Firestore CRUD
 export async function createWebhook(
   ownerJid: string,
   targetJid: string,
@@ -81,7 +79,7 @@ export async function getWebhook(token: string): Promise<WebhookConfig | null> {
   return snap.exists ? (snap.data() as WebhookConfig) : null;
 }
 
-/** List all webhooks created by a given owner. */
+// List all webhooks created by a given owner.
 export async function listWebhooks(ownerJid: string): Promise<WebhookConfig[]> {
   const snap = await db.collection(COLLECTION)
     .where("ownerJid", "==", ownerJid)
@@ -99,7 +97,7 @@ export async function deleteWebhook(token: string, ownerJid: string): Promise<bo
   return true;
 }
 
-/** Update mutable fields (target group, events, active) — owner only. */
+// Update mutable fields (target group, events, active) - owner only.
 export async function updateWebhook(
   token: string,
   ownerJid: string,
@@ -114,8 +112,7 @@ export async function updateWebhook(
   return true;
 }
 
-// ─── HMAC verification ────────────────────────────────────────────────────────
-
+// HMAC verification
 /**
  * Verify GitHub's X-Hub-Signature-256 header against the raw request body.
  * GitHub sends "sha256=<hex>" where hex = HMAC-SHA256(body, secret).
@@ -139,9 +136,8 @@ export function verifySignature(
   return crypto.timingSafeEqual(a, b);
 }
 
-// ─── Event filter ─────────────────────────────────────────────────────────────
-
-/** Does this config want to be notified about `event`? */
+// Event filter
+// Does this config want to be notified about `event`?
 export function wantsEvent(config: WebhookConfig, event: string): boolean {
   if (config.events.includes("all")) return true;
   return config.events.includes(event);

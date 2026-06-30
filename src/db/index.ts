@@ -1,22 +1,3 @@
-/**
- * db/index.ts — central Postgres connection (porsager's `postgres` driver).
- *
- * Replaces firebase.ts for everything EXCEPT the webhook system, which stays on
- * Firestore (Vercel needs cloud access — local Postgres is unreachable from
- * Vercel behind CGNAT).
- *
- * Install:  bun add postgres
- *
- * Env (with sensible Termux defaults):
- *   PGHOST      default 127.0.0.1
- *   PGPORT      default 5432
- *   PGUSER      default your termux username
- *   PGPASSWORD  default "" (Termux local trust auth often needs no password)
- *   PGDATABASE  default lasma_bot
- *
- * Or a single PG_URL like postgres://user:pass@127.0.0.1:5432/lasma_bot
- */
-
 import postgres from "postgres";
 
 const sql = process.env.PG_URL
@@ -28,7 +9,7 @@ const sql = process.env.PG_URL
       password: process.env.PGPASSWORD ?? "",
       database: process.env.PGDATABASE ?? "lasma_bot",
       onnotice: () => {},          // silence NOTICE spam
-      max:      10,                // pool size — plenty for a single-phone bot
+      max:      10,                // pool size - plenty for a single-phone bot
       idle_timeout: 30,
     });
 

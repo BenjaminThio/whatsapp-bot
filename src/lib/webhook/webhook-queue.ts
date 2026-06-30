@@ -1,8 +1,4 @@
 /**
- * webhook-queue.ts — src/lib/webhook/webhook-queue.ts
- *
- * Bot-side consumer for the Vercel→Firestore webhook relay.
- *
  * Vercel writes raw GitHub events to the `webhook_queue` collection. This
  * service polls that queue (same pattern as startScheduleService), formats each
  * event, sends it to the target WhatsApp chat, then DELETES the job so the queue
@@ -17,7 +13,7 @@ import { formatEvent } from "./format-event.js";
 
 const COLLECTION = "webhook_queue";
 const POLL_INTERVAL_MS = 30_000;
-// Safety: ignore jobs older than this (e.g. stuck/corrupt) — delete without sending
+// Safety: ignore jobs older than this (e.g. stuck/corrupt) - delete without sending
 const MAX_JOB_AGE_MS = 24 * 3_600_000;
 
 interface QueueJob {
@@ -66,36 +62,36 @@ export function startWebhookQueue(sock: any) {
             continue;
           }
 
-          // ping → friendly "connected" message
+          // ping => friendly "connected" message
           if (job.event === "ping") {
             await sock.sendMessage(job.targetJid, {
               text: "✅ *GitHub webhook connected!*\nThis chat will now receive repo events.",
             });
             await doc.ref.delete();
-            console.log(`🪝 ping → ${job.targetJid}, job deleted`);
+            console.log(`🪝 ping => ${job.targetJid}, job deleted`);
             continue;
           }
 
           // Event filter (re-checked bot-side in case config changed)
           if (!wantsEvent(job.events, job.event)) {
-            await doc.ref.delete();   // not wanted — drop quietly
+            await doc.ref.delete(); // not wanted - drop quietly
             continue;
           }
 
           // Format and send
           const formatted = formatEvent(job.event, job.payload);
           if (!formatted) {
-            // Sub-action not worth notifying (e.g. PR labeled) — drop
+            // Sub-action not worth notifying (e.g. PR labeled) - drop
             await doc.ref.delete();
             continue;
           }
 
           await sock.sendMessage(job.targetJid, { text: formatted.text });
-          await doc.ref.delete();   // clean up after successful send
-          console.log(`🪝 ${job.event} → ${job.targetJid} (${formatted.repoName ?? "?"}), job deleted`);
+          await doc.ref.delete(); // clean up after successful send
+          console.log(`🪝 ${job.event} => ${job.targetJid} (${formatted.repoName ?? "?"}), job deleted`);
 
         } catch (err) {
-          // On failure, DON'T delete — leave it for the next poll to retry.
+          // On failure, DON'T delete - leave it for the next poll to retry.
           console.error(`🪝 Failed to process job ${doc.id}:`, err);
         } finally {
           inFlight.delete(doc.id);
@@ -106,6 +102,6 @@ export function startWebhookQueue(sock: any) {
     }
   };
 
-  void poll();                       // immediate first pass
+  void poll(); // immediate first pass
   setInterval(poll, POLL_INTERVAL_MS);
 }

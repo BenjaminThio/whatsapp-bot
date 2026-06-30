@@ -266,7 +266,7 @@ function computeOutputName(source: MediaSource, targetExt: string): string {
         const parsed = path.parse(source.originalName);
         return `${parsed.name}.${targetExt}`;
     }
-    // No original name — make something readable
+    // No original name - make something readable
     const now = new Date();
     const stamp = now.toISOString().slice(0, 19).replace(/[:T-]/g, "");
     return `${source.kind}_${stamp}.${targetExt}`;
@@ -347,7 +347,7 @@ async function handleConvert(sock: any, msg: WAMessage, text: string) {
         const isStaticImageTarget = STATIC_IMAGE_FORMATS.has(targetExt);
 
         if (isAnimatedGif && isStaticImageTarget) {
-            console.log(`🔄 GIF → frames as .${targetExt} (will ZIP)`);
+            console.log(`🔄 GIF => frames as .${targetExt} (will ZIP)`);
 
             const baseName = computeBaseName(source);
             const zipBuf = await extractGifFramesToZip(inputBuf, targetExt, baseName);
@@ -365,7 +365,7 @@ async function handleConvert(sock: any, msg: WAMessage, text: string) {
         }
 
         // Branch: regular single-file conversion
-        console.log(`🔄 Converting ${source.kind} (${source.sourceMime}, ${(inputBuf.length / 1024).toFixed(1)} KB) → .${targetExt}`);
+        console.log(`🔄 Converting ${source.kind} (${source.sourceMime}, ${(inputBuf.length / 1024).toFixed(1)} KB) => .${targetExt}`);
 
         const outputBuf = await convertWithFfmpeg(inputBuf, targetExt, source.kind === "image");
         const outputMime = OUTPUT_MIME[targetExt] || "application/octet-stream";

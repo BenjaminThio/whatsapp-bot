@@ -1,5 +1,5 @@
 """
-music_engine.py — resolve a YouTube (or other) URL to a direct media stream URL
+music_engine.py - resolve a YouTube (or other) URL to a direct media stream URL
 plus metadata, using yt-dlp. Prints a single JSON object to stdout.
 
 Usage:  python music_engine.py <url>
@@ -49,7 +49,7 @@ def main() -> None:
     url = sys.argv[1]
 
     # Prefer a combined audio+video MP4 the bot can send as a video message.
-    # Fall back to best available. We don't download — just resolve the URL.
+    # Fall back to best available. We don't download - just resolve the URL.
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,

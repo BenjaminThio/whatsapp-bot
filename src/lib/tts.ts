@@ -1,8 +1,8 @@
 /*
- * tts.ts — shared text-to-speech utilities.  (lives in src/lib/)
+ * tts.ts - shared text-to-speech utilities.  (lives in src/lib/)
  *
- * generateSpeech(text, lang) → Promise<Buffer>   MP3 bytes
- * getUserTtsLang(jid)        → Promise<string>   2-letter code, defaults "en"
+ * generateSpeech(text, lang) => Promise<Buffer>   MP3 bytes
+ * getUserTtsLang(jid)        => Promise<string>   2-letter code, defaults "en"
  *
  * Cross-platform: on Windows it runs the compiled gtts_engine.exe; on
  * Termux/Linux it runs gtts_engine.py through the system Python. The runHelper
@@ -18,7 +18,7 @@ const GTTS_EXE = path.join(import.meta.dir, "../modules/gtts_engine.exe");
 const GTTS_PY = path.join(import.meta.dir, "../modules/gtts_engine.py");
 const GENERATE_TIMEOUT_MS = 30_000;
 
-/** Render `text` to MP3 bytes via the gTTS engine (exe on Windows, py elsewhere). */
+// Render `text` to MP3 bytes via the gTTS engine (exe on Windows, py elsewhere).
 export function generateSpeech(text: string, lang: string): Promise<Buffer> {
     // The engine takes [lang, text] as CLI args and emits MP3 bytes on stdout.
     return runHelper(PROJECT_ROOT, {
@@ -30,7 +30,7 @@ export function generateSpeech(text: string, lang: string): Promise<Buffer> {
     });
 }
 
-/** Get the user's preferred TTS language from Postgres. Defaults to "en". */
+// Get the user's preferred TTS language from Postgres. Defaults to "en".
 export async function getUserTtsLang(jid: string): Promise<string> {
     try {
         const prefs = await getPrefs(jid);

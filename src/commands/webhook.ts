@@ -1,18 +1,16 @@
 /**
- * webhook.ts — src/commands/webhook.ts
+ * Telegram BotFather-style command to create and manage GitHub webhooks.
  *
- * BotFather-style command to create and manage GitHub webhooks.
- *
- *   !webhook new [events]        — create a webhook; notify THIS chat
- *   !webhook new <jid> [events]  — create; notify a specific group jid
- *   !webhook list                — list your webhooks
- *   !webhook events <id> <list>  — change which events a webhook notifies
- *   !webhook target <id> [jid]   — change target chat (defaults to current)
- *   !webhook delete <id>         — delete a webhook
- *   !webhook help                — show GitHub setup instructions
+ *   !webhook new [events]        - create a webhook; notify THIS chat
+ *   !webhook new <jid> [events]  - create; notify a specific group jid
+ *   !webhook list                - list your webhooks
+ *   !webhook events <id> <list>  - change which events a webhook notifies
+ *   !webhook target <id> [jid]   - change target chat (defaults to current)
+ *   !webhook delete <id>         - delete a webhook
+ *   !webhook help                - show GitHub setup instructions
  *
  * `events` is a comma/space list from: push, pull_request, issues, release,
- * star, fork — or `all`. Defaults to `push` if omitted.
+ * star, fork - or `all`. Defaults to `push` if omitted.
  */
 
 import { WAMessage } from "@whiskeysockets/baileys";
@@ -25,12 +23,11 @@ import {
 function publicUrl(token: string): string {
   // Points to the Vercel relay, NOT the bot. Vercel verifies the HMAC and queues
   // the event to Firestore; the bot consumes the queue. This URL never changes.
-  // Set VERCEL_WEBHOOK_URL to e.g. "https://lasma-webhook-relay.vercel.app"
-  const base = (process.env["VERCEL_WEBHOOK_URL"] ?? "https://YOUR_PROJECT.vercel.app").replace(/\/$/, "");
+  const base = (process.env["VERCEL_WEBHOOK_URL"]!).replace(/\/$/, "");
   return `${base}/api/github/${token}`;
 }
 
-/** Parse an events list like "push, issues" → ["push","issues"]; validate. */
+// Parse an events list like "push, issues" => ["push","issues"]; validate.
 function parseEvents(raw: string): { events: string[]; invalid: string[] } {
   const parts = raw.split(/[\s,]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
   if (parts.includes("all")) return { events: ["all"], invalid: [] };
@@ -54,17 +51,17 @@ function setupInstructions(cfg: WebhookConfig): string {
     `\`${cfg.secret}\``,
     ``,
     `*📋 GitHub setup:*`,
-    `1. Repo → Settings → Webhooks → Add webhook`,
+    `1. Repo => Settings => Webhooks => Add webhook`,
     `2. Paste the *Payload URL* above`,
     `3. Content type: \`application/json\``,
     `4. Paste the *Secret* above`,
-    `5. Choose events: ${cfg.events.includes("all") ? "_Send me everything_" : "_Let me select_ → " + cfg.events.join(", ")}`,
+    `5. Choose events: ${cfg.events.includes("all") ? "_Send me everything_" : "_Let me select_ => " + cfg.events.join(", ")}`,
     `6. Click *Add webhook*`,
     ``,
     `📢 Notifying: ${cfg.targetJid === "" ? "this chat" : cfg.targetJid}`,
     `🆔 \`${cfg.token.slice(0, 8)}\``,
     ``,
-    `_Keep the secret private — it's what stops other people from spamming your webhook._`,
+    `_Keep the secret private - it's what stops other people from spamming your webhook._`,
   ].join("\n");
 }
 
@@ -77,17 +74,17 @@ async function handleWebhook(sock: any, msg: WAMessage, text: string) {
   const tokens = args.split(/\s+/).filter(Boolean);
   const sub = (tokens[0] ?? "").toLowerCase();
 
-  // ── help / setup ──────────────────────────────────────────────────────────
+  // help / setup
   if (!sub || sub === "help") {
     await sock.sendMessage(jid, {
       text:
         "🪝 *GitHub Webhook Manager*\n\n" +
-        "• `!webhook new [events]` — notify *this* chat\n" +
-        "• `!webhook new <group_jid> [events]` — notify a specific group\n" +
-        "• `!webhook list` — your webhooks\n" +
-        "• `!webhook events <id> <list>` — change events\n" +
-        "• `!webhook target <id> [jid]` — change target chat\n" +
-        "• `!webhook delete <id>` — remove a webhook\n\n" +
+        "• `!webhook new [events]` - notify *this* chat\n" +
+        "• `!webhook new <group_jid> [events]` - notify a specific group\n" +
+        "• `!webhook list` - your webhooks\n" +
+        "• `!webhook events <id> <list>` - change events\n" +
+        "• `!webhook target <id> [jid]` - change target chat\n" +
+        "• `!webhook delete <id>` - remove a webhook\n\n" +
         `*Events:* ${SUPPORTED_EVENTS.join(", ")}, or \`all\`\n` +
         "_Default is `push` if you don't specify._\n\n" +
         "*Example:* `!webhook new push,issues`",
@@ -95,10 +92,10 @@ async function handleWebhook(sock: any, msg: WAMessage, text: string) {
     return;
   }
 
-  // ── new ─────────────────────────────────────────────────────────────────────
+  // new
   if (sub === "new") {
     // Args after "new": optional <jid> then optional <events>
-    let targetJid = jid;             // default: current chat
+    let targetJid = jid; // default: current chat
     let eventArgs = tokens.slice(1);
 
     // If the first arg looks like a jid, use it as the target
@@ -108,7 +105,7 @@ async function handleWebhook(sock: any, msg: WAMessage, text: string) {
     }
 
     const eventStr = eventArgs.join(" ").trim();
-    let events: string[] = ["push"];   // default
+    let events: string[] = ["push"]; // default
     if (eventStr) {
       const parsed = parseEvents(eventStr);
       if (parsed.invalid.length) {
@@ -127,7 +124,7 @@ async function handleWebhook(sock: any, msg: WAMessage, text: string) {
     return;
   }
 
-  // ── list ────────────────────────────────────────────────────────────────────
+  // list
   if (sub === "list") {
     const hooks = await listWebhooks(ownerJid);
     if (hooks.length === 0) {
@@ -160,7 +157,7 @@ async function handleWebhook(sock: any, msg: WAMessage, text: string) {
     return hooks.find(h => h.token.startsWith(prefix)) ?? null;
   }
 
-  // ── delete ──────────────────────────────────────────────────────────────────
+  // delete
   if (sub === "delete") {
     const hook = await resolveOwned(idPrefix);
     if (!hook) { await sock.sendMessage(jid, { text: `❌ No webhook \`${idPrefix}\` found.` }, { quoted: msg }); return; }
@@ -169,7 +166,7 @@ async function handleWebhook(sock: any, msg: WAMessage, text: string) {
     return;
   }
 
-  // ── events ──────────────────────────────────────────────────────────────────
+  // events
   if (sub === "events") {
     const hook = await resolveOwned(idPrefix);
     if (!hook) { await sock.sendMessage(jid, { text: `❌ No webhook \`${idPrefix}\` found.` }, { quoted: msg }); return; }
@@ -186,7 +183,7 @@ async function handleWebhook(sock: any, msg: WAMessage, text: string) {
     return;
   }
 
-  // ── target ──────────────────────────────────────────────────────────────────
+  // target
   if (sub === "target") {
     const hook = await resolveOwned(idPrefix);
     if (!hook) { await sock.sendMessage(jid, { text: `❌ No webhook \`${idPrefix}\` found.` }, { quoted: msg }); return; }

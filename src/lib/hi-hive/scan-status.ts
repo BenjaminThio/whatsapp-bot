@@ -1,20 +1,14 @@
-/**
- * scan-status.ts — src/lib/hi-hive/scan-status.ts
- *
- * Rich, human-readable statuses for the auto-scan report. Instead of collapsing
- * every outcome into "marked" / "rejected", each distinct result gets its own
- * code, emoji, and a clearly-worded sentence.
- */
+// Rich, human-readable statuses for the auto-scan report.
 
 export type ReportStatus =
-  // ── Success ──────────────────────────────────────────────────────────────
+  // Success
   | "marked"              // server recorded attendance just now
   | "already_marked"      // attendance for this class was already recorded earlier
-  // ── Bot-side skips (we chose not to submit) ───────────────────────────────
+  // Bot-side skips (we chose not to submit)
   | "not_enrolled"        // student isn't enrolled in this course
   | "not_in_schedule"     // QR doesn't match the student's known timetable (smart-skip)
   | "account_unverified"  // account couldn't be verified (likely fake / wrong creds)
-  // ── Server-side rejections / problems ─────────────────────────────────────
+  // Server-side rejections / problems
   | "rejected"            // server refused (wrong datetime, not enrolled server-side, etc.)
   | "window_closed"       // QR window had not opened yet or had already passed
   | "session_expired"     // login/session expired on the server
@@ -92,7 +86,7 @@ export const STATUS_META: Record<ReportStatus, StatusMeta> = {
   },
 };
 
-/** Map a raw scanQr() ScanStatus into our richer ReportStatus. */
+// Map a raw scanQr() ScanStatus into our richer ReportStatus.
 export function fromScanStatus(status: string | null | undefined): ReportStatus {
   switch (status) {
     case "marked":         return "marked";
@@ -108,7 +102,7 @@ export function fromScanStatus(status: string | null | undefined): ReportStatus 
   }
 }
 
-/** Build one report line for a student + status. */
+// Build one report line for a student + status.
 export function formatStatusLine(studentId: string, status: ReportStatus, time: string): string {
   const m = STATUS_META[status];
   return `${m.emoji} *[${time}]* \`${studentId}\` ➔ *${m.label}*\n     _${m.sentence}_`;

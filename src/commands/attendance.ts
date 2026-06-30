@@ -14,16 +14,15 @@ import type { GetAttendanceResult, AttendanceCourse } from "../lib/hi-hive/types
     - Overall % at the bottom
 
   Usage:
-    !attendance               — full report, all courses
-    !attendance UECS2194      — filter to one course (case-insensitive substring)
+    !attendance               - full report, all courses
+    !attendance UECS2194      - filter to one course (case-insensitive substring)
 */
 
-// ─── Formatter (restored from old hi-hive formatter) ─────────────────────────
-
+// Formatter (restored from old hi-hive formatter)
 const PCT_BAR_LEN = 10;
 
 function pctBar(pct: number | null): string {
-  if (pct === null) return "▒".repeat(PCT_BAR_LEN) + " —";
+  if (pct === null) return "▒".repeat(PCT_BAR_LEN) + " -";
   const filled = Math.round((pct / 100) * PCT_BAR_LEN);
   const bar = "█".repeat(filled) + "░".repeat(PCT_BAR_LEN - filled);
   const icon = pct >= 80 ? "✅" : pct >= 60 ? "⚠️" : "❌";
@@ -42,8 +41,8 @@ function statusEmoji(status: string | null): string {
 
 function formatCourse(c: AttendanceCourse): string {
   const lines: string[] = [];
-  const att = c.attended === null ? "—" : c.attended.toFixed(1);
-  const tot = c.total    === null ? "—" : c.total.toFixed(1);
+  const att = c.attended === null ? "-" : c.attended.toFixed(1);
+  const tot = c.total    === null ? "-" : c.total.toFixed(1);
 
   lines.push(`\n📚 *${c.name ?? c.code ?? "?"}*`);
   lines.push(`   ${pctBar(c.percent)}  (${att}/${tot}h)`);
@@ -58,7 +57,7 @@ function formatCourse(c: AttendanceCourse): string {
 }
 
 export function formatAttendance(result: GetAttendanceResult, courseFilter?: string): string {
-  // ── Error states ──────────────────────────────────────────────────────────
+  // Error states
   if (!result.ok) {
     return (
       `❌ *Attendance Error*\n${result.message}\n\n` +
@@ -76,12 +75,12 @@ export function formatAttendance(result: GetAttendanceResult, courseFilter?: str
     );
   }
 
-  // courses[] is empty but message has raw text — parser couldn't read the
+  // courses[] is empty but message has raw text - parser couldn't read the
   // HTML table structure. Show the raw text so you can diagnose + send it to
   // the dev to fix the parser. Set DEBUG_ATTENDANCE=1 to also dump the HTML.
   if (result.courses.length === 0 && result.message !== "OK") {
     return (
-      `📋 *Attendance (raw — table parse failed)*\n` +
+      `📋 *Attendance (raw - table parse failed)*\n` +
       `_Set DEBUG_ATTENDANCE=1 and check /tmp/utar_attendance_debug.html_\n\n` +
       `${"─".repeat(36)}\n` +
       result.message
@@ -90,7 +89,7 @@ export function formatAttendance(result: GetAttendanceResult, courseFilter?: str
 
   const lines: string[] = [];
 
-  // ── Profile header ────────────────────────────────────────────────────────
+  // Profile header
   const prof = result.profile;
   if (prof?.name || prof?.studentId) {
     lines.push(`👤 *${prof.name ?? "?"}* (${prof.studentId ?? "?"})`);
@@ -98,7 +97,7 @@ export function formatAttendance(result: GetAttendanceResult, courseFilter?: str
   }
   lines.push("─".repeat(36));
 
-  // ── Course rows ───────────────────────────────────────────────────────────
+  // Course rows
   if (result.courses.length === 0) {
     lines.push(courseFilter
       ? `No course matching _${courseFilter}_ found.`
@@ -110,7 +109,7 @@ export function formatAttendance(result: GetAttendanceResult, courseFilter?: str
     lines.push(formatCourse(c));
   }
 
-  // ── Overall ───────────────────────────────────────────────────────────────
+  // Overall
   if (!courseFilter && result.overallPercent !== null) {
     lines.push("\n" + "─".repeat(36));
     lines.push(`📊 *Overall: ${result.overallPercent}%*`);
@@ -119,8 +118,7 @@ export function formatAttendance(result: GetAttendanceResult, courseFilter?: str
   return lines.join("\n");
 }
 
-// ─── Handler ──────────────────────────────────────────────────────────────────
-
+// Handler
 export async function handleAttendance(sock: WASocket, msg: WAMessage, text: string) {
   if (!msg.key.remoteJid) return;
 
@@ -171,8 +169,7 @@ export async function handleAttendance(sock: WASocket, msg: WAMessage, text: str
   }
 }
 
-// ─── Command definition ───────────────────────────────────────────────────────
-
+// Command definition
 const command: Command = {
   name: "attendance",
   aliases: ["att", "a"],

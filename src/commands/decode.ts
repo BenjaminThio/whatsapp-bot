@@ -6,8 +6,8 @@ import { decodeQr } from "../lib/old-hi-hive/decode-qr.js";
 import type { DecodedQr } from "../lib/old-hi-hive/types.js";
 
 /*
-  !decode                — send or reply to a QR image → zxing scan → validate attendance header → decode offline
-  !decode <raw_qr>       — decode a raw QR string directly (original behaviour, unchanged)
+  !decode                - send or reply to a QR image => zxing scan => validate attendance header => decode offline
+  !decode <raw_qr>       - decode a raw QR string directly (original behaviour, unchanged)
 
   "Fits the attendance header" means the extracted string starts with one of
   the known QR types (E01, Q01, Q02, LQR, CTR) followed by the ":*:" separator.
@@ -15,8 +15,7 @@ import type { DecodedQr } from "../lib/old-hi-hive/types.js";
   what was found rather than giving a generic "decode failed" error.
 */
 
-// ─── Known attendance QR types (from decode-qr.ts / scanner.py) ──────────────
-
+// Known attendance QR types (from decode-qr.ts / scanner.py)
 const VALID_QR_TYPES = ["E01", "Q01", "Q02", "LQR", "CTR"];
 const QR_SEPARATOR   = ":*:";
 
@@ -26,8 +25,7 @@ function isAttendanceQr(raw: string): boolean {
     return VALID_QR_TYPES.includes(raw.substring(0, sep));
 }
 
-// ─── Image helpers (same pattern as scan.ts) ──────────────────────────────────
-
+// Image helpers (same pattern as scan.ts)
 function extractImageMessage(msg: WAMessage): any | null {
     const messageBody = msg.message?.ephemeralMessage?.message || msg.message;
     if (!messageBody) return null;
@@ -69,8 +67,7 @@ async function scanQR(imageInput: Uint8Array): Promise<string | null> {
     }
 }
 
-// ─── Result formatter ─────────────────────────────────────────────────────────
-
+// Result formatter
 const VERDICT_LABEL: Record<string, string> = {
     in_window: "✅ LIKELY VALID",
     expired:   "❌ LIKELY EXPIRED",
@@ -82,13 +79,13 @@ function formatDecoded(decoded: DecodedQr, source: "image" | "text"): string {
     const lines: string[] = [];
 
     const sourceNote = source === "image"
-        ? "🖼️ *Decoded from image (offline — no server call)*"
-        : "🔍 *Decoded QR (offline — no server call)*";
+        ? "🖼️ *Decoded from image (offline - no server call)*"
+        : "🔍 *Decoded QR (offline - no server call)*";
 
     lines.push(sourceNote);
     lines.push("─".repeat(36));
     lines.push(`*Type:*     ${decoded.type}`);
-    lines.push(`*Class ID:* ${decoded.classId ?? "—"}`);
+    lines.push(`*Class ID:* ${decoded.classId ?? "-"}`);
     lines.push(`*Raw:*      \`${decoded.raw}\``);
     lines.push("");
 
@@ -96,17 +93,17 @@ function formatDecoded(decoded: DecodedQr, source: "image" | "text"): string {
 
     if (decoded.type === "Q01" || decoded.type === "Q02") {
         lines.push("📋 *Class Info*");
-        lines.push(`• Course:    ${info.courseCode  || "—"}`);
-        lines.push(`• Session:   ${info.sessionType || "—"}`);
-        lines.push(`• Group:     ${info.group       || "—"}`);
-        lines.push(`• Date/Time: ${info.datetime    || "—"}`);
-        lines.push(`• Hours:     ${info.hours       || "—"}`);
+        lines.push(`• Course:    ${info.courseCode  || "-"}`);
+        lines.push(`• Session:   ${info.sessionType || "-"}`);
+        lines.push(`• Group:     ${info.group       || "-"}`);
+        lines.push(`• Date/Time: ${info.datetime    || "-"}`);
+        lines.push(`• Hours:     ${info.hours       || "-"}`);
     } else if (decoded.type === "E01") {
         lines.push("📋 *Event Info*");
-        lines.push(`• Event: ${info.eventName || "—"}`);
-        lines.push(`• From:  ${info.from      || "—"}`);
-        lines.push(`• To:    ${info.to        || "—"}`);
-        lines.push(`• Venue: ${info.venue     || "—"}`);
+        lines.push(`• Event: ${info.eventName || "-"}`);
+        lines.push(`• From:  ${info.from      || "-"}`);
+        lines.push(`• To:    ${info.to        || "-"}`);
+        lines.push(`• Venue: ${info.venue     || "-"}`);
     } else {
         lines.push(`📋 *QR Type:* ${decoded.type}`);
     }
@@ -115,13 +112,12 @@ function formatDecoded(decoded: DecodedQr, source: "image" | "text"): string {
     lines.push("─".repeat(36));
     lines.push(`⏱️ *Expiry:* ${VERDICT_LABEL[decoded.expiry.verdict] ?? decoded.expiry.verdict}`);
     lines.push(`_${decoded.expiry.reason}_`);
-    lines.push("_(Prediction only — server clock is the final authority)_");
+    lines.push("_(Prediction only - server clock is the final authority)_");
 
     return lines.join("\n");
 }
 
-// ─── Sub-handlers ─────────────────────────────────────────────────────────────
-
+// Sub-handlers
 async function handleDecodeImage(sock: any, msg: WAMessage): Promise<void> {
     if (!msg.key.remoteJid) return;
 
@@ -170,7 +166,7 @@ async function handleDecodeImage(sock: any, msg: WAMessage): Promise<void> {
     // No QR detected at all
     if (!extracted) {
         await sock.sendMessage(chatId, {
-            text: "❌ *No QR code detected in the image.*\nWhatsApp compression may have blurred it — try sending the original file.",
+            text: "❌ *No QR code detected in the image.*\nWhatsApp compression may have blurred it - try sending the original file.",
         }, { quoted: msg });
         return;
     }
@@ -186,7 +182,7 @@ async function handleDecodeImage(sock: any, msg: WAMessage): Promise<void> {
         return;
     }
 
-    // Valid attendance QR — decode it
+    // Valid attendance QR - decode it
     const result = decodeQr(userId, extracted);
 
     if (!result.ok) {
@@ -237,8 +233,7 @@ async function handleDecodeText(sock: any, msg: WAMessage, rawQr: string): Promi
     }, { quoted: msg });
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
-
+// Main handler
 async function handleDecode(sock: any, msg: WAMessage, text: string): Promise<void> {
     if (!msg.key.remoteJid) return;
 
@@ -246,10 +241,10 @@ async function handleDecode(sock: any, msg: WAMessage, text: string): Promise<vo
 
     try {
         if (rawQr) {
-            // Raw QR string provided as text — original behaviour
+            // Raw QR string provided as text - original behaviour
             await handleDecodeText(sock, msg, rawQr);
         } else {
-            // No text after !decode — look for an image
+            // No text after !decode - look for an image
             await handleDecodeImage(sock, msg);
         }
     } catch (err: any) {
@@ -260,8 +255,7 @@ async function handleDecode(sock: any, msg: WAMessage, text: string): Promise<vo
     }
 }
 
-// ─── Command definition ───────────────────────────────────────────────────────
-
+// Command definition
 const command: Command = {
     name: "decode",
     aliases: ["d"],

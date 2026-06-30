@@ -39,7 +39,7 @@ function parseTimeToken(tok: string): TimeParts | null {
     const s = parts.length >= 3 ? parseInt(parts[2], 10) : 0;
 
     /*
-    Bare numbers like "14" are only a time if am/pm present or it has a colon —
+    Bare numbers like "14" are only a time if am/pm present or it has a colon -
     otherwise "25" in "25/12" would parse as a time. parts.length 1 without
     am/pm is rejected.
     */
@@ -64,7 +64,7 @@ function parseDateToken(tok: string, now: Date): { y: number; mo: number; d: num
             y = parseInt(parts[0], 10); mo = parseInt(parts[1], 10); d = parseInt(parts[2], 10);
         } else {                                // DD/MM/YYYY
             d = parseInt(parts[0], 10); mo = parseInt(parts[1], 10); y = parseInt(parts[2], 10);
-            if (y < 100) y += 2000;             // "26" → 2026
+            if (y < 100) y += 2000;             // "26" => 2026
         }
     } else {                                    // DD/MM, no year
         d = parseInt(parts[0], 10); mo = parseInt(parts[1], 10);
@@ -84,7 +84,7 @@ function parseDurationTokens(tokens: string[]): { ms: number; consumed: number }
     let consumed = 0;
     for (const tok of tokens) {
         const t = tok.toLowerCase();
-        // Composite like "1h30m" or simple "10m" — scan number+unit pairs
+        // Composite like "1h30m" or simple "10m" - scan number+unit pairs
         let i = 0, tokMs = 0, valid = t.length > 0;
         while (i < t.length) {
             let j = i;

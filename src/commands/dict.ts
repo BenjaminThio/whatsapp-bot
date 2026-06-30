@@ -76,7 +76,7 @@ function parseBuffer(): void {
 
         const q = queue.shift();
         if (!q) {
-            console.error(`📖 Orphan response received (${status}, ${len} bytes) — discarding`);
+            console.error(`📖 Orphan response received (${status}, ${len} bytes) - discarding`);
             continue;
         }
 

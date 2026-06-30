@@ -4,7 +4,7 @@ langmap.ts - maps Wiktionary language-section names to gTTS language codes.
 Wiktionary writes section headers like "=== French ===", "=== Mandarin ===".
 gTTS wants IETF codes like "fr", "zh-CN". This table covers the languages
 gTTS actually supports (~70). Wiktionary languages NOT in this table simply
-won't get a pronunciation — better silence than a wrong-language voice.
+won't get a pronunciation - better silence than a wrong-language voice.
 
 Keys are lowercased Wiktionary language names.
 */

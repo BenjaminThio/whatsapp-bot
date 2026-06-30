@@ -1,5 +1,4 @@
-// ─── Creds ───────────────────────────────────────────────────────────────────
-
+// Creds
 export interface CredsData {
   // hi-hive fields
   userId: string;
@@ -17,8 +16,7 @@ export interface CredsData {
   utarEncryptedData: string | null;
 }
 
-// ─── decodeQr ────────────────────────────────────────────────────────────────
-
+// decodeQr
 export type QrType = "E01" | "Q01" | "Q02" | "LQR" | "CTR";
 export type ExpiryVerdict = "in_window" | "expired" | "too_early" | "unknown";
 
@@ -55,11 +53,10 @@ export interface DecodeQrError {
   error: string;
 }
 
-// ─── scanQr ──────────────────────────────────────────────────────────────────
-
+// scanQr
 export type ScanStatus =
   | "marked"          // success patterns found in HTML
-  | "rejected"        // error patterns — wrong datetime / already taken / not enrolled
+  | "rejected"        // error patterns - wrong datetime / already taken / not enrolled
   | "token_expired"   // session expired / please login patterns
   | "scanner_page"    // server returned the scanner page (QR window passed / too early)
   | "unknown_flag"    // server replied but result unclear
@@ -73,11 +70,11 @@ export interface ScanQrResult {
   status: ScanStatus;
   message: string;
   courseCode: string | null;
-  /** The pre-check expiry prediction made before the network call */
+  // The pre-check expiry prediction made before the network call
   expiry: DecodedQr["expiry"] | null;
-  /** URL of the server's result image (Tick.png = success, Cross.png = failure) */
+  // URL of the server's result image (Tick.png = success, Cross.png = failure)
   imageUrl: string | null;
-  /** Stripped server response text */
+  // Stripped server response text
   serverResponse: string | null;
 }
 
@@ -86,7 +83,7 @@ export interface SimpleScanQrResult {
   datetime: Date
 }
 
-// ─── refreshToken ────────────────────────────────────────────────────────────
+// refreshToken
 
 export interface RefreshTokenResult {
   ok: boolean;
@@ -96,7 +93,7 @@ export interface RefreshTokenResult {
   tokenChanged?: boolean;
 }
 
-// ─── getAttendance ───────────────────────────────────────────────────────────
+// getAttendance
 
 export interface AttendanceRecord {
   recordedDatetime: string | null;
@@ -130,7 +127,7 @@ export interface GetAttendanceResult {
   no_record: boolean;
   profile: AttendanceProfile | null;
   courses: AttendanceCourse[];
-  /** Overall attendance % across all courses, null if no data */
+  // Overall attendance % across all courses, null if no data
   overallPercent: number | null;
   message: string;
 }

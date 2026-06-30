@@ -1,18 +1,3 @@
-/**
- * getAttendance — mirrors show_attendance() from utar_attendance.py.
- *
- * Flow:
- *   1. Resolve UTAR token (stored utarEncryptedData, or auto-generate)
- *   2. POST to SCAN_URL to establish the web session cookie
- *   3. POST to REPORT_URL — try encryptedData=realToken, then "null"
- *   4. Parse the HTML attendance table into structured AttendanceCourse[]
- *      so the formatter can render progress bars, records, and overall %
- *
- * Env vars:
- *   UTAR_SCAN_URL    — e.g. "https://www.hi-hive.com/UTAR/main.jsp"
- *   UTAR_REPORT_URL  — e.g. "https://www.hi-hive.com/UTAR/QRAttendanceReport.jsp"
- */
-
 import { loadCreds } from "./creds.js";
 import { generateEncryptedData } from "./scan-qr.js";
 import type {
@@ -38,8 +23,7 @@ const STATUS_LABELS: Record<string, string> = {
   L: "On Leave",
 };
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
+// Public API
 export interface GetAttendanceOptions {
   scanUrl?:   string;
   reportUrl?: string;
@@ -63,8 +47,8 @@ export async function getAttendance(
     return errResult("UTAR_SCAN_URL and UTAR_REPORT_URL must be set.");
   }
 
-  // ── Resolve token ─────────────────────────────────────────────────────────
-  // Always generate fresh from id + email + current datetime — never use stored token.
+  // Resolve token
+  // Always generate fresh from id + email + current datetime - never use stored token.
   // Formula: AES-128-CBC( studentId + "FFF" + email + "FFF" + datetime + "FFF" )
   // If options.creds is given, use it directly (validates unsaved credentials);
   // otherwise load from the database by userId.
@@ -74,14 +58,14 @@ export async function getAttendance(
 
   if (!creds.id || !creds.email) {
     return errResult(
-      "Missing id or email — both are required to generate a token."
+      "Missing id or email - both are required to generate a token."
     );
   }
 
   const utarToken = generateEncryptedData(creds.id, creds.email);
   console.log(`[getAttendance] Generated fresh token for ${creds.id} / ${creds.email}`);
 
-  // ── Step 1: establish session ─────────────────────────────────────────────
+  // Establish session
   let cookies = "";
   try {
     const r = await fetch(scanUrl, {
@@ -95,7 +79,7 @@ export async function getAttendance(
     return errResult(`Session establishment failed: ${e}`);
   }
 
-  // ── Step 2: fetch report — try real token, then "null" ────────────────────
+  // Fetch report - try real token, then "null"
   const attempts = [
     { encVal: utarToken, label: "real token" },
     { encVal: "null",    label: "null"        },
@@ -130,7 +114,7 @@ export async function getAttendance(
     const hasError = joined.includes("something went wrong") || joined.includes("unexpected error");
     console.log(`[getAttendance] hasError=${hasError}`);
     if (hasError) {
-      console.log(`[getAttendance] skipping attempt=${label} — error page detected`);
+      console.log(`[getAttendance] skipping attempt=${label} - error page detected`);
       continue;
     }
 
@@ -152,31 +136,7 @@ export async function getAttendance(
   );
 }
 
-// ─── Parser for the real UTAR attendance HTML structure ───────────────────────
-//
-// Observed structure (from actual HTML dump):
-//
-// Profile (inside a <td>):
-//   Name: BENJAMIN THIO ZI LIANG
-//   Student ID: 2504142
-//   Session: 202606
-//
-// Per-course collapsible button (multiline <b> inside <button class="collapsible">):
-//   Course: UECS2033 - SOFTWARE PROJECT MANAGEMENT
-//   Total Class Hours attended: 4.0
-//   Total Class Hours: 4.0
-//   Percent: 100
-//
-// Per-session records inside <div class="content"><p>:
-//   (no <table> — pure <br/>-delimited key:value pairs, one block per session)
-//   Class Datetime: 2026-06-22 13:00:00
-//   Recorded Datetime: 2026-06-22 13:06:11
-//   Recorded By: BENJAMIN THIO ZI LIANG
-//   Type: Lecture
-//   Group: 1
-//   Class Hours: 2.0
-//   Status: Attended
-
+// Parser for the real UTAR attendance HTML structure
 function innerText(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, "\n")   // <br/> → newline
@@ -185,7 +145,7 @@ function innerText(html: string): string {
     .replace(/&amp;/gi, "&")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
-    .replace(/\r\n/g, "\n")          // normalise CRLF → LF
+    .replace(/\r\n/g, "\n")          // normalise CRLF => LF
     .replace(/\r/g, "\n")
     .split("\n")
     .map(l => l.trim())              // trim each line individually
@@ -229,7 +189,7 @@ function extractProfile(html: string): AttendanceProfile | null {
 
 /**
  * Parse the <div class="content"> inner HTML into AttendanceRecord[].
- * Each session starts with "Class Datetime:" — we split on that keyword.
+ * Each session starts with "Class Datetime:" - we split on that keyword.
  */
 function parseContentBlock(contentHtml: string): AttendanceRecord[] {
   const text = innerText(contentHtml);
@@ -291,7 +251,7 @@ function parseHtml(html: string, courseFilter?: string): GetAttendanceResult {
     const courseRaw  = field(btnText, "Course");
     if (!courseRaw) continue;
 
-    // Split "UECS2033 - SOFTWARE PROJECT MANAGEMENT" into code + name
+    // Split into code + name
     const codeSplit  = courseRaw.match(/^([A-Z0-9]+)\s*-\s*(.+)$/);
     const code       = codeSplit?.[1]?.trim() ?? courseRaw.trim();
     const name       = codeSplit?.[2]?.trim() ?? courseRaw.trim();
@@ -313,7 +273,7 @@ function parseHtml(html: string, courseFilter?: string): GetAttendanceResult {
     console.log(`  → ${c.code} | ${c.name} | ${c.attended}/${c.total}h | ${c.percent}%`)
   );
 
-  // Fallback: no collapsible sections found — return raw stripped text
+  // Fallback: no collapsible sections found - return raw stripped text
   if (courses.length === 0) {
     const stripped = innerText(html).replace(/\n{3,}/g, "\n\n").trim().slice(0, 3000);
     console.log(`[getAttendance] no courses parsed. Stripped (500):\n${stripped.slice(0, 500)}`);
@@ -341,8 +301,7 @@ function parseHtml(html: string, courseFilter?: string): GetAttendanceResult {
   };
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
+// Helpers
 function errResult(message: string): GetAttendanceResult {
   return {
     ok:             false,

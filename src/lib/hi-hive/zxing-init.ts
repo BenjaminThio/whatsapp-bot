@@ -1,20 +1,3 @@
-/**
- * zxing-init.ts — src/lib/hi-hive/zxing-init.ts
- *
- * Fixes the "both async and sync fetching of the wasm failed" crash by loading
- * zxing-wasm's .wasm from the LOCAL node_modules copy instead of fetching from
- * a CDN at runtime.
- *
- * Cross-platform: walks up from the resolved module entry to the package root
- * using `path` (handles Windows backslashes AND posix slashes), then locates
- * dist/full/zxing_full.wasm.
- *
- * Usage:
- *   import { readBarcodes, writeBarcode } from "zxing-wasm/full";
- *   import { ensureZXingReady } from "<path>/zxing-init.js";
- *   ensureZXingReady();   // once before the first read/write
- */
-
 import { prepareZXingModule } from "zxing-wasm/full";
 import { readFileSync, existsSync } from "fs";
 import { createRequire } from "module";
@@ -22,7 +5,7 @@ import path from "path";
 
 let prepared = false;
 
-/** Locate the full .wasm by walking up to the zxing-wasm package root. */
+// Locate the full .wasm by walking up to the zxing-wasm package root.
 function localWasmPath(): string | null {
   const require = createRequire(import.meta.url);
 
@@ -57,7 +40,7 @@ export function ensureZXingReady(): void {
 
   const wasmPath = localWasmPath();
   if (!wasmPath) {
-    console.error("[zxing-init] Local wasm not found — leaving defaults (may fetch from CDN).");
+    console.error("[zxing-init] Local wasm not found - leaving defaults (may fetch from CDN).");
     return;
   }
 

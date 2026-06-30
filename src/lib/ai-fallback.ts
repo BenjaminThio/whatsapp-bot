@@ -1,25 +1,8 @@
 /**
- * ai-fallback.ts — src/lib/ai-fallback.ts
- *
  * Cascading multi-model / multi-provider AI caller. Tries each candidate in
  * order; on a rate-limit / quota / overload error, automatically falls through
  * to the next. Each provider is a SEPARATE free quota bucket, so it's very hard
  * to exhaust all of them at once.
- *
- * Providers used (all free, no credit card):
- *   - Gemini   : your AI_API_KEY. Frontier closed model, multimodal (images/audio/pdf).
- *   - Groq     : GROQ_API_KEY.     Fastest open-weights, Llama 3.3 70B + GPT-OSS 120B. Text only.
- *   - Cerebras : CEREBRAS_API_KEY. Even faster than Groq (~2000 tok/s), Llama 3.3 70B. Text only.
- *   - OpenRouter: OPENROUTER_API_KEY. One key → many free models w/ auto-failover. Text only.
- *
- * All non-Gemini providers are OpenAI-compatible, so they share one caller.
- * Text-only providers are skipped automatically when media is attached.
- *
- * Setup — add whichever keys you want to .env (more keys = more resilience):
- *   AI_API_KEY=...          (Gemini, you already have this)
- *   GROQ_API_KEY=...        (console.groq.com — no card)
- *   CEREBRAS_API_KEY=...    (cloud.cerebras.ai — no card)
- *   OPENROUTER_API_KEY=...  (openrouter.ai — no card for free models)
  */
 
 import { GoogleGenAI } from "@google/genai";

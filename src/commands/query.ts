@@ -49,7 +49,7 @@ function extractMediaMessage(msg: WAMessage): ExtractedMedia | null {
 }
 
 /*
-Extract the prompt text from the !query message — caption when media is attached,
+Extract the prompt text from the !query message - caption when media is attached,
 or extendedTextMessage.text when replying to media.
 */
 function extractPrompt(msg: WAMessage): string {
@@ -128,15 +128,15 @@ async function handleQuery(sock: any, msg: WAMessage, _text: string) {
         const effectivePrompt = prompt || (media ? `Describe this ${media.kind} in detail.` : "");
         if (effectivePrompt) parts.push({ text: effectivePrompt });
 
-        // ── Ask the AI with automatic model/provider fallback ────────────────
-        // Cascades Gemini 2.5 Flash → 2.5 Flash-Lite → 3 Flash → Groq Llama,
+        // Ask the AI with automatic model/provider fallback
+        // Cascades Gemini 2.5 Flash => 2.5 Flash-Lite => 3 Flash => Groq Llama,
         // skipping text-only Groq lanes when media is attached.
         const { text: aiAnswer, model } = await askWithFallback(
             chatHistory, parts, SYSTEM_INSTRUCTION, hasMedia
         );
         if (!aiAnswer) throw new Error("Empty response from AI");
 
-        // Save text-only turn to history (no media bytes — Firestore 1 MB doc limit)
+        // Save text-only turn to history (no media bytes - Firestore 1 MB doc limit)
         const historyPromptText = media
             ? `[User sent ${media.kind}] ${effectivePrompt}`
             : effectivePrompt;

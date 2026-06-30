@@ -3,7 +3,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { Command } from "./_types.js";
 
-// ─── Data shape (updated for the new JSONL format with designs) ───
+// Data shape (updated for the new JSONL format with designs)
 interface Timeline {
     date: string;
     image_url: string;
@@ -25,16 +25,16 @@ interface EmojiEntry {
     alias?: string[];
     variant?: boolean;
     alert?: string;
-    designs?: Design[];          // NEW: per-platform design history
+    designs?: Design[]; // per-platform design history
 }
 
-// ─── Lazy-loaded indexes ───
+// Lazy-loaded indexes
 let entries: EmojiEntry[] | null = null;
 let byChar: Map<string, EmojiEntry> | null = null;
 let byCode: Map<string, EmojiEntry> | null = null;
 let byNameLower: Map<string, EmojiEntry> | null = null;
 
-// NOTE: file is now JSONL (.jsonl), one JSON object per line.
+// File is now JSONL (.jsonl), one JSON object per line.
 const DATA_PATH = path.join(import.meta.dir, "../../data/emoji.jsonl");
 
 // Which design platform to prefer for the image. Microsoft Teams first (as
@@ -85,7 +85,7 @@ function loadIndexes(): void {
     console.log(`📖 Indexed ${entries.length} emoji entries${skipped ? ` (${skipped} malformed lines skipped)` : ""}.`);
 }
 
-// ─── Lookup (unchanged logic) ───
+// Lookup (unchanged logic)
 function findEntry(query: string): { entry: EmojiEntry; method: string } | { suggestions: EmojiEntry[] } | null {
     if (!entries || !byChar || !byCode || !byNameLower) return null;
 
@@ -130,7 +130,7 @@ function findEntry(query: string): { entry: EmojiEntry; method: string } | { sug
     return { suggestions: scored.slice(0, 6).map(s => s.entry) };
 }
 
-// ─── Design / image selection ───
+// Design / image selection
 interface PickedImage {
     url: string;
     platformTitle: string;
@@ -162,7 +162,7 @@ function pickImage(entry: EmojiEntry): PickedImage | null {
         }
     }
 
-    // Nothing in the preferred list matched — fall back to the very first design
+    // Nothing in the preferred list matched - fall back to the very first design
     const first = entry.designs[0];
     if (first && first.timelines.length > 0) {
         const latest = first.timelines[first.timelines.length - 1];
@@ -173,7 +173,7 @@ function pickImage(entry: EmojiEntry): PickedImage | null {
     return null;
 }
 
-/** Download an image URL into a Buffer, or null on failure. */
+// Download an image URL into a Buffer, or null on failure.
 async function fetchImage(url: string): Promise<Buffer | null> {
     try {
         const controller = new AbortController();
@@ -194,7 +194,7 @@ async function fetchImage(url: string): Promise<Buffer | null> {
     }
 }
 
-// ─── Formatting ───
+// Formatting
 const MAX_CAPTION = 1024;   // WhatsApp image caption limit
 
 function formatEntry(entry: EmojiEntry, method: string, picked: PickedImage | null): string {
@@ -250,7 +250,7 @@ function formatSuggestions(suggestions: EmojiEntry[]): string {
     return lines.join("\n");
 }
 
-// ─── Handler ───
+// Handler
 async function handleEmojipedia(sock: any, msg: WAMessage, text: string) {
     if (!msg.key.remoteJid) return;
 
@@ -293,11 +293,11 @@ async function handleEmojipedia(sock: any, msg: WAMessage, text: string) {
                 }, { quoted: msg });
                 return;
             }
-            // Image download failed — fall through to text-only
+            // Image download failed - fall through to text-only
             console.warn(`📖 Failed to download image for ${entry.name}: ${picked.url}`);
         }
 
-        // No design/image, or download failed → text only
+        // No design/image, or download failed => text only
         await sock.sendMessage(msg.key.remoteJid, { text: caption }, { quoted: msg });
 
     } catch (error: any) {

@@ -1,40 +1,13 @@
-/**
- * scanQr — mirrors scan_qr() from utar_attendance.py (latest version).
- *
- * Two-step POST flow (confirmed from QR_ClassAttendance_Scanner.html):
- *
- *   Step 1 — establish UTAR web session
- *     POST SCAN_URL  { encryptedData: utarToken }
- *     → server sets a session cookie and identifies the student
- *
- *   Step 2 — submit the QR scan
- *     POST SCAN_URL  { qrMessage: rawQr + ":*:" + lat + ":*:" + lon + ":*:0",
- *                      encryptedData: utarToken }   ← real token, NOT "null"
- *     → HTML response; extract handleCallback('...') from the JS, classify result
- *
- * GPS coordinates are REQUIRED. Without them the server silently returns the
- * scanner page and ignores the QR (confirmed when "Allow location" was needed).
- * Defaults to UTAR Sungai Long campus: lat=3.0543 lon=101.7297
- *
- * Token resolution (mirrors get_token()):
- *   1. stored utarEncryptedData in creds.json
- *   2. auto-generate from utarStudentId + userId (email) + current datetime
- *
- * Env var:
- *   UTAR_SCAN_URL  — e.g. "https://www.hi-hive.com/UTAR/main.jsp"
- */
-
 import { loadCreds, AES_KEY, AES_IV } from "./creds.js";
 import { decodeQr } from "../old-hi-hive/decode-qr.js";
 import crypto from "crypto";
 import type { ScanQrResult, ScanStatus, DecodedQr } from "./types.js";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-
+// Constants
 const QR_SEPARATOR   = ":*:";
 const VALID_QR_TYPES = ["E01", "Q01", "Q02", "LQR", "CTR"];
 
-// UTAR Sungai Long campus GPS — required by the server
+// UTAR Sungai Long campus GPS - required by the server
 const UTAR_LAT = "3.0543";
 const UTAR_LON = "101.7297";
 
@@ -47,14 +20,13 @@ const UA_BROWSER: Record<string, string> = {
   "Referer":      "https://portal.utar.edu.my/stuIntranet/default.jsp",
 };
 
-// ─── Public API ───────────────────────────────────────────────────────────────
-
+// Public API
 export interface ScanQrOptions {
-  /** Override UTAR_SCAN_URL env var */
+  // Override UTAR_SCAN_URL env var
   scanUrl?: string;
-  /** Path to creds.json. Default: next to this file */
+  // Path to creds.json. Default: next to this file
   credsPath?: string;
-  /** GPS coords to include in qrMessage. Defaults to UTAR Sungai Long. */
+  // GPS coords to include in qrMessage. Defaults to UTAR Sungai Long.
   coords?: { lat: string; lon: string };
 }
 
@@ -63,7 +35,7 @@ export interface ScanQrOptions {
  *
  * @param rawQr   - Raw QR string e.g. "Q01:*:<encrypted_payload>"
  * @param options - Optional overrides
- */
+*/
 export async function scanQr(
   docId: string,
   rawQr: string,
@@ -78,7 +50,7 @@ export async function scanQr(
       "UTAR_SCAN_URL is not set. Pass scanUrl in options or set the env var.");
   }
 
-  // ── Validate QR type ──────────────────────────────────────────────────────
+  // Validate QR type
   rawQr = rawQr.trim();
   const qrType = rawQr.substring(0, rawQr.indexOf(QR_SEPARATOR));
   if (!VALID_QR_TYPES.includes(qrType)) {
@@ -86,7 +58,7 @@ export async function scanQr(
       `Invalid QR type '${qrType}'. Expected one of: ${VALID_QR_TYPES.join(", ")}.`);
   }
 
-  // ── Offline expiry pre-check ──────────────────────────────────────────────
+  // Offline expiry pre-check
   let expiry:     DecodedQr["expiry"] | null = null;
   let courseCode: string | null = null;
   const decodeResult = decodeQr(docId, rawQr);
@@ -95,10 +67,10 @@ export async function scanQr(
     courseCode = decodeResult.decoded.info.courseCode ?? null;
   }
 
-  // ── Resolve UTAR token ────────────────────────────────────────────────────
+  // Resolve UTAR token
   // Always generate a fresh token in real-time from id + email + current datetime.
   // Formula: AES-128-CBC( studentId + "FFF" + email + "FFF" + datetime + "FFF" )
-  // A stale stored token causes "Invalid QR code" — fresh is always correct.
+  // A stale stored token causes "Invalid QR code" - fresh is always correct.
   const creds = await loadCreds(docId);
 
   if (creds === undefined) return undefined;
@@ -112,7 +84,7 @@ export async function scanQr(
   const utarToken = generateEncryptedData(creds.id, creds.email);
   console.log(`[scanQr] Generated fresh token for ${creds.id} / ${creds.email}`);
 
-  // ── Step 1: establish session ─────────────────────────────────────────────
+  // establish session
   let cookies = "";
   try {
     const r = await fetch(scanUrl, {
@@ -130,10 +102,10 @@ export async function scanQr(
     return fail("network_error", `Session establishment failed: ${e}`, courseCode, expiry);
   }
 
-  // ── Step 2: submit QR scan ────────────────────────────────────────────────
+  // submit QR scan
   // qrMessage format (from QR_ClassAttendance_Scanner.html line 419):
   //   rawQr + ":*:" + lat + ":*:" + lon + ":*:0"
-  // GPS is REQUIRED — empty coords cause the server to silently return the scanner page
+  // GPS is REQUIRED - empty coords cause the server to silently return the scanner page
   const qrMessage = `${rawQr}${QR_SEPARATOR}${lat}${QR_SEPARATOR}${lon}${QR_SEPARATOR}0`;
 
   const step2Headers: Record<string, string> = {
@@ -144,7 +116,7 @@ export async function scanQr(
 
   let htmlBody: string;
   try {
-    // Step 2 sends the REAL token (not "null") — confirmed from new utar_attendance.py
+    // Sends the REAL token (not "null") - confirmed from new utar_attendance.py
     const r = await fetch(scanUrl, {
       method:   "POST",
       headers:  step2Headers,
@@ -156,11 +128,11 @@ export async function scanQr(
     return fail("network_error", `QR submission failed: ${e}`, courseCode, expiry);
   }
 
-  // ── Parse response: extract handleCallback('...') from JS ─────────────────
+  // Parse response: extract handleCallback('...') from JS
   // The server embeds results in a JS callback rather than plain HTML:
-  //   handleCallback('QR code has expired...')        → expired
-  //   handleCallback('Q01:*:...:*:...:*:0')           → success (flag=0)
-  //   handleCallback('Exception: Internal server..')  → server error
+  //   handleCallback('QR code has expired...')        => expired
+  //   handleCallback('Q01:*:...:*:...:*:0')           => success (flag=0)
+  //   handleCallback('Exception: Internal server..')  => server error
   const cbMatch = htmlBody.match(/handleCallback\('([\s\S]*?)'\)/);
   const cbData  = cbMatch ? cbMatch[1].replace(/\\'/g, "'") : "";
   const cbLower = cbData.toLowerCase();
@@ -169,7 +141,7 @@ export async function scanQr(
     // Extract server result image URL (Tick.png = success, Cross.png = failure)
     const imageUrl = extractImageUrl(cbData);
 
-    // Convert <br/> → newlines first, then strip tags for clean keyword matching
+    // Convert <br/> => newlines first, then strip tags for clean keyword matching
     const cbLines = cbData
       .replace(/<br\s*\/?>/gi, "\n")
       .replace(/<[^>]+>/g, "")
@@ -183,13 +155,13 @@ export async function scanQr(
       return {
         ok: false, status: "auth_error",
         message:
-          "Server error — the session may not be carrying student identity. " +
+          "Server error - the session may not be carrying student identity. " +
           "Ensure id + email are set in your Firestore hi_hive document.",
         courseCode: null, expiry, imageUrl, serverResponse: cbLines.slice(0, 500),
       };
     }
 
-    // All known success phrasings — "has been recorded" is the real server text
+    // All known success phrasings - "has been recorded" is the real server text
     if (cbLower.includes("attendance is taken") ||
         cbLower.includes("attendance is recorded") ||
         cbLower.includes("attendance has been recorded")) {
@@ -246,7 +218,7 @@ export async function scanQr(
     }
   }
 
-  // ── Fallback: check stripped HTML text ────────────────────────────────────
+  // Fallback: check stripped HTML text
   const stripped = htmlBody
     .replace(/<[^>]+>/g, " ")
     .replace(/\s+/g, " ")
@@ -265,12 +237,12 @@ export async function scanQr(
 
   return {
     ok: false, status: "unknown_flag",
-    message: "Result unclear — check serverResponse.",
+    message: "Result unclear - check serverResponse.",
     courseCode: null, expiry, imageUrl: null, serverResponse: stripped.slice(0, 500),
   };
 }
 
-// ─── Token generation (mirrors generate_encrypted_data) ───────────────────────
+// Token generation (mirrors generate_encrypted_data)
 
 /**
  * Auto-generate the UTAR encryptedData token from studentId + email + now.
@@ -298,28 +270,28 @@ export function generateEncryptedData(
 }
 
 export function decryptData(encryptedBase64: string): { studentId: string; email: string; loginTime: string } {
-  // 1. Recreate the Key and IV buffers exactly as done in encryption
+  // Recreate the Key and IV buffers exactly as done in encryption
   const keyBuf = Buffer.from(AES_KEY, "utf-8");
   const ivBuf  = Buffer.from(AES_IV,  "utf-8");
 
-  // 2. Initialize the Decipher
+  // Initialize the Decipher
   const decipher = crypto.createDecipheriv("aes-128-cbc", keyBuf, ivBuf);
 
-  // 3. Decrypt the Base64 string back into a Buffer
+  // Decrypt the Base64 string back into a Buffer
   const decryptedBuf = Buffer.concat([
     decipher.update(encryptedBase64, "base64"),
     decipher.final()
   ]);
 
-  // 4. Remove the manual padding that was added during encryption
+  // Remove the manual padding that was added during encryption
   // The last byte of the buffer contains the number of padding bytes added.
   const padLen = decryptedBuf[decryptedBuf.length - 1];
   const unpaddedBuf = decryptedBuf.subarray(0, decryptedBuf.length - padLen);
 
-  // 5. Convert the unpadded Buffer back to an ASCII string
+  // Convert the unpadded Buffer back to an ASCII string
   const plaintext = unpaddedBuf.toString("ascii");
 
-  // 6. Split the string by your 'FFF' delimiter
+  // Split the string by your 'FFF' delimiter
   const parts = plaintext.split("FFF");
 
   return {
@@ -329,9 +301,8 @@ export function decryptData(encryptedBase64: string): { studentId: string; email
   };
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-/** Extract the first <img src="..."> URL from the server's callback HTML, if any. */
+// Helpers
+// Extract the first <img src="..."> URL from the server's callback HTML, if any.
 function extractImageUrl(cbData: string): string | null {
   const m = cbData.match(/<img[^>]+src=["']([^"']+)["']/i);
   return m ? m[1] : null;

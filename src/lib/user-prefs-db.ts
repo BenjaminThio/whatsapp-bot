@@ -1,5 +1,5 @@
 /**
- * user-prefs-db.ts — Postgres data access for user preferences.
+ * user-prefs-db.ts - Postgres data access for user preferences.
  * Was: Firestore collection "user_prefs", doc id = userId (schemaless blob).
  *
  * Stored as a single JSONB column so any key/value the code used round-trips
@@ -15,7 +15,7 @@ export async function getPrefs(userId: string): Promise<Record<string, any>> {
   return rows.length ? (rows[0].prefs ?? {}) : {};
 }
 
-/** Merge-patch the prefs blob (like Firestore set({merge:true})). */
+// Merge-patch the prefs blob (like Firestore set({merge:true})).
 export async function setPrefs(userId: string, patch: Record<string, any>): Promise<void> {
   await sql`
     INSERT INTO user_prefs (user_id, prefs, updated_at)
@@ -26,7 +26,7 @@ export async function setPrefs(userId: string, patch: Record<string, any>): Prom
   `;
 }
 
-/** Overwrite the whole prefs blob. */
+// Overwrite the whole prefs blob.
 export async function replacePrefs(userId: string, prefs: Record<string, any>): Promise<void> {
   await sql`
     INSERT INTO user_prefs (user_id, prefs, updated_at)

@@ -30,14 +30,14 @@ const MAX_PER_CHAT = 25;
 const MAX_FUTURE_MS = 366 * 24 * 3_600_000;   // 1 year ahead
 
 /*
-Escalation intensity levels — pick one with --escalate=<level>.
+Escalation intensity levels - pick one with --escalate=<level>.
 Each is a list of how long BEFORE the deadline a ping fires. Only milestones
 still in the future at creation time get scheduled, so a near deadline auto-skips
-the far pings. You fully control these — add/remove rows to taste.
+the far pings. You fully control these - add/remove rows to taste.
 
-  light      — minimal nagging, just the essentials
-  balanced   — sensible default for most deadlines (exams, assignments)
-  aggressive — frequent pings, for things you absolutely cannot miss
+  light      - minimal nagging, just the essentials
+  balanced   - sensible default for most deadlines (exams, assignments)
+  aggressive - frequent pings, for things you absolutely cannot miss
 */
 type Milestone = { offset: number; label: string };
 
@@ -74,16 +74,16 @@ const DEFAULT_LEVEL = "balanced";
 const MAX_ESCALATION_DOCS = Math.max(...Object.values(ESCALATION_LEVELS).map(l => l.length));
 
 /*
-"auto" level — adapts the cadence to how far away the deadline is.
+"auto" level - adapts the cadence to how far away the deadline is.
 
-A full ladder of candidate offsets (1 month → 30 min → deadline). For a given
+A full ladder of candidate offsets (1 month => 30 min => deadline). For a given
 runway we keep only offsets smaller than 60% of the total time, so the first
 ping is never too early and the cadence naturally densifies toward the deadline.
 
-  3-month project → month, 2 weeks, week, 3 days, day, 12h, 3h, 1h, 30m, due
-  3-day task      → day, 12h, 3h, 1h, 30m, due
-  4-hour task     → 1h, 30m, due
-  20-min task     → due only
+  3-month project => month, 2 weeks, week, 3 days, day, 12h, 3h, 1h, 30m, due
+  3-day task      => day, 12h, 3h, 1h, 30m, due
+  4-hour task     => 1h, 30m, due
+  20-min task     => due only
 */
 const AUTO_LADDER: Milestone[] = [
     { offset: 30 * 24 * 3_600_000, label: "1 month left"    },
@@ -99,7 +99,7 @@ const AUTO_LADDER: Milestone[] = [
 ];
 
 // How small a ping's offset must be relative to the runway to be included.
-// 0.6 → the first ping fires once ~40% of the runway has elapsed.
+// 0.6 => the first ping fires once ~40% of the runway has elapsed.
 const AUTO_RUNWAY_FACTOR = 0.6;
 
 /**
@@ -132,13 +132,13 @@ async function fireReminder(sock: any, id: string, data: ScheduleDoc, overdueMs 
 
         let text: string;
         if (data.groupId && data.deadlineAt) {
-            // Escalating reminder — show urgency + exact time remaining to deadline
+            // Escalating reminder - show urgency + exact time remaining to deadline
             const isDue = data.milestoneLabel === "Now / due" || data.deadlineAt - Date.now() <= 60_000;
             const header = isDue ? "🚨 *DUE NOW!*" : "⏰ *Deadline Reminder*";
             const remaining = humanRemaining(data.deadlineAt - Date.now());
             const countdown = isDue
                 ? ""
-                : `\n⏳ *${data.milestoneLabel}* — deadline in ${remaining}`;
+                : `\n⏳ *${data.milestoneLabel}* - deadline in ${remaining}`;
             text =
                 `${header}\n\n📌 ${data.activity}\n` +
                 `🎯 Deadline: ${formatDateTime(data.deadlineAt)}${countdown}${overdueNote}`;
@@ -225,11 +225,11 @@ async function listSchedules(sock: any, msg: WAMessage) {
     for (const it of oneShots) {
         entries.push({
             sortAt: it.fireAt,
-            text: `• \`${it.id.slice(0, 6)}\` — ${formatDateTime(it.fireAt)}\n  📌 ${it.activity}`,
+            text: `• \`${it.id.slice(0, 6)}\` - ${formatDateTime(it.fireAt)}\n  📌 ${it.activity}`,
         });
     }
 
-    // Escalation groups — collapse into a single entry showing the next ping
+    // Escalation groups - collapse into a single entry showing the next ping
     for (const [groupId, docs] of groups) {
         docs.sort((a: ScheduleWithId, b: ScheduleWithId) => a.fireAt - b.fireAt);
         const next = docs[0];
@@ -238,7 +238,7 @@ async function listSchedules(sock: any, msg: WAMessage) {
         entries.push({
             sortAt: deadline,
             text:
-                `• \`${groupId.slice(0, 6)}\` 🎯 *escalating* — deadline ${formatDateTime(deadline)}\n` +
+                `• \`${groupId.slice(0, 6)}\` 🎯 *escalating* - deadline ${formatDateTime(deadline)}\n` +
                 `  📌 ${next.activity}\n` +
                 `  ⏳ next ping: ${formatDateTime(next.fireAt)} (${remainingPings} ping${remainingPings === 1 ? "" : "s"} left)`,
         });
@@ -313,10 +313,10 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
     }
 
     // Detect the escalation flag and optional level:
-    //   --escalate            → balanced (default)
-    //   --escalate=light      → light
-    //   --escalate=aggressive → aggressive
-    //   -e=light / -e         → same, short form
+    //   --escalate            => balanced (default)
+    //   --escalate=light      => light
+    //   --escalate=aggressive => aggressive
+    //   -e=light / -e         => same, short form
     let escalate = false;
     let escalateLevel = DEFAULT_LEVEL;
     let working = raw;
@@ -327,7 +327,7 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
         if (requested && VALID_LEVELS.includes(requested)) {
             escalateLevel = requested;
         } else if (requested) {
-            // Unknown level — tell the user the valid options
+            // Unknown level - tell the user the valid options
             await sock.sendMessage(msg.key.remoteJid, {
                 text:
                     `❌ Unknown escalation level: \`${requested}\`\n\n` +
@@ -387,10 +387,10 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
     }
 
     // Cap pending reminders per chat (count groups as 1 toward the cap visually,
-    // but each doc still counts — so check against the raw doc count + what we'd add)
+    // but each doc still counts - so check against the raw doc count + what we'd add)
     const pendingTotal = await pendingCount(msg.key.remoteJid);
 
-    // ── Escalating reminder: expand into one doc per future milestone ─────────
+    // Escalating reminder: expand into one doc per future milestone
     if (escalate) {
         const deadline = parsed.epochMs;
 
@@ -450,7 +450,7 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
         return;
     }
 
-    // ── Plain one-shot reminder (unchanged) ──────────────────────────────────
+    // Plain one-shot reminder (unchanged)
     if (pendingTotal >= MAX_PER_CHAT) {
         await sock.sendMessage(msg.key.remoteJid, {
             text: `❌ This chat already has ${MAX_PER_CHAT} pending reminders. Cancel some first.`

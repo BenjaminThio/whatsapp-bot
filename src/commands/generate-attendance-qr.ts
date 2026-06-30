@@ -17,15 +17,15 @@ import { aesEncrypt } from "../lib/old-hi-hive/crypto.js";
 
   Supported types:
 
-  Q01 / Q02  — class attendance QR
+  Q01 / Q02  - class attendance QR
     !genqr Q01 <classId> <courseCode> <sessionType> <group> <datetime> <hours>
     !genqr Q01 12345 UECS2194 L G1 "2025-01-20 09:00" 2
 
-  E01  — event QR
+  E01  - event QR
     !genqr E01 <classId> <eventName> <from> <to> <venue>
     !genqr E01 99999 "Orientation" "2025-01-20 08:00" "2025-01-20 12:00" "Hall A"
 
-  CTR / LQR  — minimal types, just need a classId
+  CTR / LQR  - minimal types, just need a classId
     !genqr CTR <classId>
     !genqr LQR <classId>
 
@@ -33,7 +33,7 @@ import { aesEncrypt } from "../lib/old-hi-hive/crypto.js";
   spaces in double quotes.
 */
 
-// ─── Constants (must match decode-qr.ts exactly) ─────────────────────────────
+// Constants (must match decode-qr.ts exactly)
 
 const QR_SEPARATOR   = ":*:";
 const INFO_SEPARATOR = ":-:";
@@ -41,7 +41,7 @@ const INFO_SEPARATOR = ":-:";
 const VALID_QR_TYPES = ["E01", "Q01", "Q02", "LQR", "CTR"] as const;
 type QrType = typeof VALID_QR_TYPES[number];
 
-// ─── Argument parser ─────────────────────────────────────────────────────────
+// Argument parser
 /*
   Splits a shell-style argument string, respecting "quoted phrases".
   e.g. 'Q01 12345 UECS2194 L G1 "2025-01-20 09:00" 2'
@@ -66,7 +66,7 @@ function parseArgs(input: string): string[] {
     return args;
 }
 
-// ─── Plaintext builder ────────────────────────────────────────────────────────
+// Plaintext builder
 /*
   Reassembles the exact decrypted plaintext that parseDecoded() in decode-qr.ts
   splits apart. The structure (verified from parseDecoded source):
@@ -88,8 +88,7 @@ function buildPlaintext(type: QrType, classId: string, infoParts: string[]): str
     return [type, "", "", "", classId, info].join(QR_SEPARATOR);
 }
 
-// ─── Validation helpers ───────────────────────────────────────────────────────
-
+// Validation helpers
 function usageFor(type: QrType): string {
     switch (type) {
         case "Q01":
@@ -106,8 +105,7 @@ function usageFor(type: QrType): string {
     }
 }
 
-// ─── QR image generator ───────────────────────────────────────────────────────
-
+// QR image generator
 async function buildQrImage(rawQrString: string): Promise<Buffer> {
     ensureZXingReady();
     const result = await writeBarcode(rawQrString, {
@@ -119,15 +117,14 @@ async function buildQrImage(rawQrString: string): Promise<Buffer> {
     return Buffer.from(arrayBuffer);
 }
 
-// ─── Main handler ─────────────────────────────────────────────────────────────
-
+// Main handler
 async function handleGenQr(sock: any, msg: WAMessage, text: string): Promise<void> {
     if (!msg.key.remoteJid) return;
     const jid = msg.key.remoteJid;
 
     const input = text.slice("!genqr".length).trim();
 
-    // No args at all — show full usage
+    // No args at all - show full usage
     if (!input) {
         await sock.sendMessage(jid, {
             text:
@@ -158,7 +155,7 @@ async function handleGenQr(sock: any, msg: WAMessage, text: string): Promise<voi
     const type = typeRaw as QrType;
     const rest = args.slice(1); // everything after the type
 
-    // ── Per-type argument extraction & validation ─────────────────────────────
+    // Per-type argument extraction & validation
 
     let classId: string;
     let infoParts: string[];
@@ -188,7 +185,7 @@ async function handleGenQr(sock: any, msg: WAMessage, text: string): Promise<voi
         infoParts = [rest[1], rest[2], rest[3], rest[4]];
 
     } else {
-        // CTR / LQR — just classId  (1 arg)
+        // CTR / LQR - just classId  (1 arg)
         if (rest.length < 1) {
             await sock.sendMessage(jid, {
                 text: `⚠️ *Not enough arguments for ${type}*\n\n\`${usageFor(type)}\``,
@@ -202,22 +199,22 @@ async function handleGenQr(sock: any, msg: WAMessage, text: string): Promise<voi
     await sock.sendMessage(jid, { react: { text: "⏳", key: msg.key } });
 
     try {
-        // ── Step 1: load AES key/IV from creds.json ───────────────────────────
+        // Step 1: load AES key/IV from creds.json
         const creds = loadCreds();
 
-        // ── Step 2: build plaintext (exact reversal of parseDecoded) ─────────
+        // Step 2: build plaintext (exact reversal of parseDecoded)
         const plaintext = buildPlaintext(type, classId, infoParts);
 
-        // ── Step 3: AES-128-CBC encrypt → base64 (reversal of aesDecrypt) ────
+        // Step 3: AES-128-CBC encrypt => base64 (reversal of aesDecrypt)
         const encryptedPayload = aesEncrypt(plaintext, creds.aes_key, creds.aes_iv);
 
-        // ── Step 4: assemble the final raw QR string ──────────────────────────
+        // Step 4: assemble the final raw QR string
         const rawQrString = `${type}${QR_SEPARATOR}${encryptedPayload}`;
 
-        // ── Step 5: encode as a QR image via zxing ────────────────────────────
+        // Step 5: encode as a QR image via zxing
         const imageBuffer = await buildQrImage(rawQrString);
 
-        // ── Step 6: send the image with a summary caption ─────────────────────
+        // Step 6: send the image with a summary caption
         const captionLines = [
             `✅ *Generated Attendance QR*`,
             ``,
@@ -259,8 +256,7 @@ async function handleGenQr(sock: any, msg: WAMessage, text: string): Promise<voi
     }
 }
 
-// ─── Command definition ───────────────────────────────────────────────────────
-
+// Command definition
 const command: Command = {
     name: "genqr",
     aliases: ["gqr", "createqr", "generate_attendance_qr", "generate_qr"],

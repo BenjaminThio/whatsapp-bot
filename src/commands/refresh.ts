@@ -31,7 +31,7 @@ async function handleRefresh(sock: any, msg: WAMessage, _text: string) {
     text:
       "⚠️ *Warning*\n" +
       "Refreshing the session will *sign out the phone app*.\n" +
-      "The token usually stays the same — only the sessionId changes.\n\n" +
+      "The token usually stays the same - only the sessionId changes.\n\n" +
       "⏳ Logging in..."
   }, { quoted: msg });
 
@@ -54,14 +54,14 @@ async function handleRefresh(sock: any, msg: WAMessage, _text: string) {
 
     const tokenNote = result.tokenChanged
       ? `🔄 Token *changed*`
-      : `ℹ️ Token *unchanged* (expected — app keeps the same token across logins)`;
+      : `ℹ️ Token *unchanged* (expected - app keeps the same token across logins)`;
 
     await sock.sendMessage(msg.key.remoteJid, {
       text:
         `✅ *Session refreshed!*\n\n` +
         `🆔 *New sessionId:* \`${result.newSessionId}\`\n` +
         `${tokenNote}\n\n` +
-        `_creds.json updated — next scan will use this automatically._`
+        `_creds.json updated - next scan will use this automatically._`
     }, { quoted: msg });
 
     await sock.sendMessage(msg.key.remoteJid, {

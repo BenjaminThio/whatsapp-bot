@@ -1,5 +1,5 @@
 /**
- * imagine.ts — src/commands/imagine.ts
+ * imagine.ts - src/commands/imagine.ts
  *
  * Generate an image from a text prompt using Gemini 2.5 Flash Image
  * ("Nano Banana"). Free tier: ~500 images/day, 1024x1024, reuses AI_API_KEY.
@@ -9,10 +9,10 @@
  *   !image     (alias)
  *
  * You can also attach or reply to an image to EDIT it (Nano Banana supports
- * image+text → image), e.g. reply to a photo with "!imagine make it snow".
+ * image+text => image), e.g. reply to a photo with "!imagine make it snow".
  *
  * Response shape note: the generated image is NOT in response.text. It's a
- * base64 blob inside candidates[0].content.parts[].inlineData — we iterate the
+ * base64 blob inside candidates[0].content.parts[].inlineData - we iterate the
  * parts and pick the one with inlineData.
  */
 
@@ -74,8 +74,8 @@ async function handleImagine(sock: any, msg: WAMessage, _text: string) {
     await sock.sendMessage(jid, {
       text:
         "🎨 *Usage:*\n" +
-        "• `!imagine <description>` — generate an image\n" +
-        "• Reply to / attach an image with `!imagine <edit>` — edit it\n\n" +
+        "• `!imagine <description>` - generate an image\n" +
+        "• Reply to / attach an image with `!imagine <edit>` - edit it\n\n" +
         "*Example:* `!imagine a samurai cat under cherry blossoms, cinematic`",
     }, { quoted: msg });
     return;
@@ -106,7 +106,7 @@ async function handleImagine(sock: any, msg: WAMessage, _text: string) {
     });
 
     // Pull the image out of candidates[0].content.parts[].inlineData
-    // (NOT response.text — image data lives in inlineData)
+    // (NOT response.text - image data lives in inlineData)
     const respParts = response.candidates?.[0]?.content?.parts ?? [];
     let imageBuf: Buffer | null = null;
     let textNote = "";
@@ -144,7 +144,7 @@ async function handleImagine(sock: any, msg: WAMessage, _text: string) {
     const m = String(error?.message ?? error).toLowerCase();
     const errText =
       m.includes("permission") || m.includes("api key") || m.includes("api_key")
-        ? "❌ AI key issue — check your AI_API_KEY env var."
+        ? "❌ AI key issue - check your AI_API_KEY env var."
         : m.includes("quota") || m.includes("rate") || m.includes("resource_exhausted") || m.includes("429")
           ? "❌ Image quota hit for today (free tier ~500/day). Try again after midnight Pacific."
           : m.includes("safety") || m.includes("blocked")

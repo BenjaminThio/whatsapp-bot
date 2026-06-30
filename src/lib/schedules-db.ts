@@ -1,10 +1,4 @@
-/**
- * schedules-db.ts — Postgres data access for reminders.
- * Was: Firestore collection "schedules".
- *
- * Exposes exactly the operations schedule.ts needs, so the command file stays
- * focused on parsing/formatting and this file owns all the SQL.
- */
+// Postgres data access for reminders.
 
 import crypto from "crypto";
 import sql from "../db/index.js";
@@ -42,7 +36,7 @@ function mapRow(r: any): ScheduleRow {
   };
 }
 
-/** Unfired reminders due at/before `beforeMs`. */
+// Unfired reminders due at/before `beforeMs`.
 export async function dueReminders(beforeMs: number): Promise<ScheduleRow[]> {
   const rows = await sql`
     SELECT * FROM schedules
@@ -51,7 +45,7 @@ export async function dueReminders(beforeMs: number): Promise<ScheduleRow[]> {
   return rows.map(mapRow);
 }
 
-/** All pending (unfired) reminders for a chat. */
+// All pending (unfired) reminders for a chat.
 export async function pendingForChat(jid: string): Promise<ScheduleRow[]> {
   const rows = await sql`
     SELECT * FROM schedules
@@ -60,7 +54,7 @@ export async function pendingForChat(jid: string): Promise<ScheduleRow[]> {
   return rows.map(mapRow);
 }
 
-/** Count pending reminders for a chat (for the per-chat cap). */
+// Count pending reminders for a chat (for the per-chat cap).
 export async function pendingCount(jid: string): Promise<number> {
   const rows = await sql<{ n: string }[]>`
     SELECT COUNT(*)::int AS n FROM schedules
@@ -69,12 +63,12 @@ export async function pendingCount(jid: string): Promise<number> {
   return Number(rows[0]?.n ?? 0);
 }
 
-/** Mark a single reminder fired. */
+// Mark a single reminder fired.
 export async function markFired(id: string): Promise<void> {
   await sql`UPDATE schedules SET fired = TRUE WHERE id = ${id}`;
 }
 
-/** Insert one reminder. */
+// Insert one reminder.
 export async function insertReminder(r: ScheduleRow): Promise<void> {
   await sql`
     INSERT INTO schedules
@@ -85,7 +79,7 @@ export async function insertReminder(r: ScheduleRow): Promise<void> {
   `;
 }
 
-/** Insert many reminders in one transaction (escalation milestones). */
+// Insert many reminders in one transaction (escalation milestones).
 export async function insertMany(rows: ScheduleRow[]): Promise<void> {
   await sql.begin(async (tx: any) => {
     for (const r of rows) {

@@ -1,20 +1,4 @@
-/*
-bing-images.ts — self-contained Bing image scraper. No dependencies.
-
-Bing is much friendlier to scrape than DuckDuckGo:
-  - No vqd token dance (DDG's main fragility) — just one request.
-  - Results come from the lightweight async endpoint:
-      https://www.bing.com/images/async?q=<query>&first=<offset>&mmasync=1
-  - Each result is an <a class="iusc" m="<json>"> element whose `m` attribute
-    is a JSON blob: { murl: fullImage, turl: thumbnail, purl: sourcePage, t: title }
-  - Far more forgiving rate limits than DDG.
-
-We keep the SAME exported shape as the old DDG module so the command code
-doesn't change: searchImages(query, { limit, safeSearch }) → ImageResult[].
-
-If this ever breaks, the likely culprit is the `m="..."` attribute format or
-the iusc class name changing — both are in extractResults() below.
-*/
+// self-contained Bing image scraper. No dependencies.
 
 export interface ImageResult {
     title: string;
@@ -144,7 +128,7 @@ function extractResults(html: string): ImageResult[] {
                 source: hostOf(data.purl ?? ""),
             });
         } catch {
-            // Malformed JSON for this entry — skip it
+            // Malformed JSON for this entry - skip it
             continue;
         }
     }
@@ -210,8 +194,8 @@ export async function searchImages(
     const results = extractResults(html);
 
     if (results.length === 0 && !html.includes("iusc")) {
-        // No iusc markers at all — Bing may have changed their markup
-        throw new Error("No image markers found — Bing may have changed their HTML format. Check bing-images.ts:extractResults.");
+        // No iusc markers at all - Bing may have changed their markup
+        throw new Error("No image markers found - Bing may have changed their HTML format. Check bing-images.ts:extractResults.");
     }
 
     cacheSet(key, results);

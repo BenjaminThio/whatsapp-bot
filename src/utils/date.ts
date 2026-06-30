@@ -3,7 +3,7 @@
 //
 // Supports two shapes:
 //   - DD<sep>MM<sep>YYYY    e.g. "09/03/2005", "9-3-2005", "9.3.2005"
-//   - DD<sep>MM             e.g. "09/03", "9-3"  (year is null → recurring yearly reminder)
+//   - DD<sep>MM             e.g. "09/03", "9-3"  (year is null => recurring yearly reminder)
 //
 // Validation: uses Date object roundtrip to catch impossible dates like 31/02.
 
@@ -42,7 +42,7 @@ export function parseFlexibleDate(input: string): ParsedDate | null {
             probe.getDate() !== day
         ) return null;
     } else {
-        // No year supplied — validate against a leap year so Feb 29 is allowed
+        // No year supplied - validate against a leap year so Feb 29 is allowed
         const probe = new Date(2000, month - 1, day);
         if (probe.getMonth() !== month - 1 || probe.getDate() !== day) return null;
     }

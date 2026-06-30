@@ -1,12 +1,12 @@
 /*
- * subprocess.ts — one robust, cross-platform way to run a Python script or a
+ * subprocess.ts - one robust, cross-platform way to run a Python script or a
  * native helper binary and pipe bytes through it.
  *
  * Solves two problems at once:
  *
  * 1. PORTABILITY. On Windows you run scripts through the bundled venv
  *    interpreter (.venv/Scripts/python.exe) or a compiled .exe. On Termux /
- *    Linux there's no venv and no .exe — you call the system `python` against
+ *    Linux there's no venv and no .exe - you call the system `python` against
  *    the .py source directly. resolvePython() and runPythonScript() hide that
  *    difference so command files don't hardcode Windows paths.
  *
@@ -37,7 +37,7 @@ export function resolvePython(projectRoot: string): string {
     }
     const venv = path.join(projectRoot, ".venv", "bin", "python");
     if (existsSync(venv)) return venv;
-    // No venv on Termux — system python. Prefer python3 if the bare `python`
+    // No venv on Termux - system python. Prefer python3 if the bare `python`
     // doesn't exist (some distros only ship python3).
     return "python3";
 }
@@ -82,7 +82,7 @@ export function runProcess(command: string, baseArgs: string[], opts: RunOptions
         const timer = setTimeout(() => {
             if (settled) return;
             settled = true;
-            console.error(`🐍 [${label}] timed out after ${timeoutMs / 1000}s — killing process`);
+            console.error(`🐍 [${label}] timed out after ${timeoutMs / 1000}s - killing process`);
             try { worker.kill("SIGKILL"); } catch { /* already dead */ }
             reject(new Error(`${label} timed out after ${timeoutMs / 1000}s.\nStderr:\n${stderrText.trim() || "(empty)"}`));
         }, timeoutMs);
@@ -120,7 +120,7 @@ export function runProcess(command: string, baseArgs: string[], opts: RunOptions
                 return resolve(out);
             }
 
-            const err = stderrText.trim() || "(no stderr — likely a crash before any handler ran)";
+            const err = stderrText.trim() || "(no stderr - likely a crash before any handler ran)";
             reject(new Error(
                 `${label} exited with code ${code}${signal ? ` (signal ${signal})` : ""}.\n` +
                 `--- stderr ---\n${err}\n--- end ---`

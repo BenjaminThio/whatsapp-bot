@@ -1,24 +1,3 @@
-/**
- * account-validation.ts — src/lib/hi-hive/account-validation.ts
- *
- * Verifies that a hi-hive account actually exists before (or after) we submit a
- * QR scan for it, by fetching its attendance report and checking the returned
- * profile identity against the claimed credentials.
- *
- * Why the attendance report is the right signal:
- *   - A REAL account renders a profile block ("Name:", "Student ID:") on the
- *     report page, and the Student ID equals the account's own id.
- *   - A FAKE account (e.g. id "999999", email "blah@1utar.my") has no profile
- *     to render — the server returns a loading/empty shell, so extractProfile
- *     returns null OR a studentId that doesn't match.
- *
- * This is far more reliable than "did the course table parse", which can fail
- * for real accounts too (slow render, JS shell, week-1 with no records).
- *
- * Also exposes helpers for the (optional) smart-schedule feature: building the
- * set of enrolled course codes and the historical timetable from attendance.
- */
-
 import { getAttendance } from "./get-attendance.js";
 import type { GetAttendanceResult, AttendanceCourse, AttendanceRecord } from "./types.js";
 import { canonicalCode } from "./course-aliases.js";
@@ -53,7 +32,7 @@ export async function validateAccount(
     };
   }
 
-  // No result at all → creds missing / undefined
+  // No result at all => creds missing / undefined
   if (!attendance) {
     return {
       exists: false,
@@ -68,18 +47,18 @@ export async function validateAccount(
   const expected  = expectedId.trim();
 
   if (!profileId) {
-    // Real accounts always render their Student ID. None → almost certainly fake,
+    // Real accounts always render their Student ID. None => almost certainly fake,
     // OR the page didn't render (loading shell). Either way we can't confirm it.
     return {
       exists: false,
-      reason: "No Student ID in attendance report — account unverifiable (likely fake or page not rendered).",
+      reason: "No Student ID in attendance report - account unverifiable (likely fake or page not rendered).",
       attendance,
       enrolledCodes: enrolledCodesOf(attendance.courses),
     };
   }
 
   if (profileId !== expected) {
-    // The server returned SOMEONE ELSE's profile, or a mismatch — reject.
+    // The server returned SOMEONE ELSE's profile, or a mismatch - reject.
     return {
       exists: false,
       reason: `Profile Student ID (${profileId}) does not match credentials (${expected}).`,
@@ -134,12 +113,12 @@ export async function validateRawCreds(
       reason: `Server profile (${profileId}) doesn't match the Student ID entered (${id}).`,
     };
   }
-  return { valid: true, reason: `Verified — account ${profileId} exists on hi-hive.` };
+  return { valid: true, reason: `Verified - account ${profileId} exists on hi-hive.` };
 }
 
 /**
  * Check whether a scanned QR's class is ALREADY recorded as attended in the
- * attendance report — so we can skip re-scanning a class we already have, and
+ * attendance report - so we can skip re-scanning a class we already have, and
  * still allow re-scanning one that was never recorded or previously failed.
  *
  * Matching is tolerant on datetime: the QR carries "2026-06-24 11:00" (no
@@ -147,8 +126,8 @@ export async function validateRawCreds(
  * course code + same calendar date + same hour:minute.
  *
  * Returns:
- *   recorded  — true if an "Attended" record matches this QR's class
- *   record    — the matching record (for messaging), if any
+ *   recorded  - true if an "Attended" record matches this QR's class
+ *   record    - the matching record (for messaging), if any
  */
 export function isAlreadyRecorded(
   attendance: GetAttendanceResult,
@@ -168,30 +147,29 @@ export function isAlreadyRecorded(
       if (recKey !== wantKey) continue;
 
       // Same class. Is it actually counted as attended?
-      //   status "A" = Attended  → already recorded, skip re-scan
-      //   status D/N/L or null   → NOT attended → allow (re)scan
+      //   status "A" = Attended  => already recorded, skip re-scan
+      //   status D/N/L or null   => NOT attended => allow (re)scan
       const isAttended =
         rec.status === "A" ||
         rec.statusLabel.toLowerCase() === "attended";
 
       if (isAttended) return { recorded: true, record: rec };
-      // Found the class but not attended (e.g. Absence) — allow rescan
+      // Found the class but not attended (e.g. Absence) - allow rescan
       return { recorded: false, record: rec };
     }
   }
   return { recorded: false, record: null };
 }
 
-/** Normalise "YYYY-MM-DD HH:MM[:SS]" → "YYYY-MM-DD HH:MM" for tolerant matching. */
+/** Normalise "YYYY-MM-DD HH:MM[:SS]" => "YYYY-MM-DD HH:MM" for tolerant matching. */
 function normaliseDatetimeKey(dt: string): string | null {
   const m = dt.trim().match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}):(\d{2})/);
   if (!m) return null;
   return `${m[1]} ${m[2]}:${m[3]}`;
 }
 
-// ─── Helpers for the smart-schedule feature (Feature 3) ───────────────────────
-
-/** Course codes present in the attendance data (uppercased, deduped). */
+// Helpers for the smart-schedule feature
+// Course codes present in the attendance data (uppercased, deduped).
 export function enrolledCodesOf(courses: AttendanceCourse[]): Set<string> {
   const set = new Set<string>();
   for (const c of courses) {
@@ -212,7 +190,7 @@ export interface ScheduleSlot {
   group:      string;   // "5"
 }
 
-/** Build the set of historical schedule slots from attendance records. */
+// Build the set of historical schedule slots from attendance records.
 export function buildScheduleSlots(attendance: GetAttendanceResult): ScheduleSlot[] {
   const slots: ScheduleSlot[] = [];
   const seen = new Set<string>();
@@ -250,10 +228,10 @@ export function matchesSchedule(
   slots: ScheduleSlot[],
   scanned: { courseCode: string; classDatetime: string; group: string }
 ): boolean {
-  if (slots.length === 0) return true;   // no history (week 1) → can't judge, allow
+  if (slots.length === 0) return true;   // no history (week 1) => can't judge, allow
 
   const d = new Date(scanned.classDatetime.replace(" ", "T"));
-  if (isNaN(d.getTime())) return true;   // unparseable → don't block
+  if (isNaN(d.getTime())) return true;   // unparseable => don't block
 
   const code  = canonicalCode(scanned.courseCode);
   const dow   = d.getDay();

@@ -1,12 +1,3 @@
-/**
- * ai-memory.ts — chat history persistence, now on Postgres `ai_memory` table.
- * Was: Firestore collection "ai_memory", doc id = chatId, field history[].
- *
- * Extracted into its own helper so query.ts just calls load/save and doesn't
- * care about the storage backend. Keeps the same sliding-window + size-guard
- * logic we built for Firestore.
- */
-
 import sql from "../db/index.js";
 
 export const MAX_HISTORY = 40;          // 20 exchanges
@@ -17,7 +8,7 @@ export interface HistoryTurn {
   parts: { text: string }[];
 }
 
-/** Load history for a chat, trimmed to the last MAX_HISTORY turns. */
+// Load history for a chat, trimmed to the last MAX_HISTORY turns.
 export async function loadHistory(chatId: string): Promise<HistoryTurn[]> {
   const rows = await sql<{ history: HistoryTurn[] }[]>`
     SELECT history FROM ai_memory WHERE chat_id = ${chatId} LIMIT 1

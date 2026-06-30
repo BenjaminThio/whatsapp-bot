@@ -6,7 +6,7 @@ const MAX_IMAGES = 10;
 const DEFAULT_IMAGES = 1;
 const FETCH_TIMEOUT_MS = 10_000;
 
-/** Download one image URL into a Buffer, or null on any failure. */
+// Download one image URL into a Buffer, or null on any failure.
 async function fetchImage(url: string): Promise<Buffer | null> {
     try {
         const controller = new AbortController();
@@ -92,7 +92,7 @@ async function handleSearch(sock: any, msg: WAMessage, text: string) {
             try {
                 await sock.sendMessage(msg.key.remoteJid, {
                     image: imgBuf,
-                    caption: sent === 0 ? `🔍 *${query}* — result ${sent + 1}` : `${sent + 1}`,
+                    caption: sent === 0 ? `🔍 *${query}* - result ${sent + 1}` : `${sent + 1}`,
                 }, { quoted: sent === 0 ? msg : undefined });
                 sent++;
             } catch (sendErr) {
@@ -115,7 +115,7 @@ async function handleSearch(sock: any, msg: WAMessage, text: string) {
         const m = error?.message || "";
         let userMsg = "❌ Image search failed. Check server logs.";
         if (m.includes("changed their HTML")) {
-            userMsg = "❌ Image search broke — Bing changed their page format. Needs a code patch in bing-images.ts.";
+            userMsg = "❌ Image search broke - Bing changed their page format. Needs a code patch in bing-images.ts.";
         } else if (m.includes("429") || m.includes("rate-limit")) {
             userMsg = "❌ Bing is rate-limiting us. Wait a minute and try again.";
         }

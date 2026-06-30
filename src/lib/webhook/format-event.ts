@@ -1,5 +1,5 @@
 /**
- * format-event.ts — src/lib/webhook/format-event.ts
+ * format-event.ts - src/lib/webhook/format-event.ts
  *
  * Turns a GitHub webhook payload into a WhatsApp-friendly message.
  * Each handler takes the parsed JSON payload and returns a string, or null
@@ -15,8 +15,7 @@ function repoFull(payload: any): string | null {
   return payload?.repository?.full_name ?? null;
 }
 
-// ─── push ─────────────────────────────────────────────────────────────────────
-
+// push
 function formatPush(p: any): string | null {
   const commits: any[] = p.commits ?? [];
   if (commits.length === 0) return null;   // branch deletes, tag pushes, etc.
@@ -27,12 +26,12 @@ function formatPush(p: any): string | null {
   const pusher   = p.pusher?.name ?? p.sender?.login ?? "someone";
   const compare  = p.compare ?? "";
 
-  // Full commit list — each line: "- <message first line> (sha) — author"
+  // Full commit list - each line: "- <message first line> (sha) - author"
   const commitList = commits.map((c: any) => {
     const sha = (c.id ?? "").slice(0, 7);
     const msg = (c.message ?? "").split("\n")[0];
     const who = c.author?.username ?? c.author?.name ?? "?";
-    return `  • ${msg}  \`${sha}\` — _${who}_`;
+    return `  • ${msg}  \`${sha}\` - _${who}_`;
   }).join("\n");
 
   const count = commits.length;
@@ -52,8 +51,7 @@ function formatPush(p: any): string | null {
   ].filter(Boolean).join("\n");
 }
 
-// ─── pull_request ─────────────────────────────────────────────────────────────
-
+// pull_request
 function formatPullRequest(p: any): string | null {
   const action = p.action;
   const interesting = ["opened", "closed", "reopened", "ready_for_review"];
@@ -89,8 +87,7 @@ function formatPullRequest(p: any): string | null {
   ].filter(Boolean).join("\n");
 }
 
-// ─── issues ───────────────────────────────────────────────────────────────────
-
+// issues
 function formatIssues(p: any): string | null {
   const action = p.action;
   const interesting = ["opened", "closed", "reopened"];
@@ -118,8 +115,7 @@ function formatIssues(p: any): string | null {
   ].filter(Boolean).join("\n");
 }
 
-// ─── release ──────────────────────────────────────────────────────────────────
-
+// release
 function formatRelease(p: any): string | null {
   if (p.action !== "published") return null;
   const repo     = repoFull(p) ?? "repo";
@@ -139,8 +135,7 @@ function formatRelease(p: any): string | null {
   ].filter(Boolean).join("\n");
 }
 
-// ─── star / fork ──────────────────────────────────────────────────────────────
-
+// star / fork
 function formatStar(p: any): string | null {
   if (p.action !== "created") return null;
   const repo = repoFull(p) ?? "repo";
@@ -156,8 +151,7 @@ function formatFork(p: any): string | null {
   return `🍴 *${repo}*\n${who} forked the repo${forkName ? ` → ${forkName}` : ""}`;
 }
 
-// ─── Dispatcher ───────────────────────────────────────────────────────────────
-
+// Dispatcher
 const HANDLERS: Record<string, (p: any) => string | null> = {
   push:         formatPush,
   pull_request: formatPullRequest,
@@ -174,7 +168,7 @@ const HANDLERS: Record<string, (p: any) => string | null> = {
 export function formatEvent(event: string, payload: any): FormatResult | null {
   const handler = HANDLERS[event];
   if (!handler) {
-    // Unknown event — a minimal generic note (only if repo present)
+    // Unknown event - a minimal generic note (only if repo present)
     const repo = repoFull(payload);
     if (!repo) return null;
     return { text: `🔔 *${repo}*\nReceived \`${event}\` event`, repoName: repo };

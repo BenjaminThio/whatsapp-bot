@@ -1,16 +1,9 @@
-/**
- * birthday-db.ts — Postgres data access for the birthday feature.
- * Was: Firestore collection "birthdays".
- *
- * Matches the real fields used by birthday.ts:
- *   name, date ("DD/MM"), birthYear (number|null), jid, remindYear (number|null)
- * doc id was `${jid}_${name}` with spaces → underscores; we keep that as the PK.
- */
+// Postgres data access for the birthday feature.
 
 import sql from "../db/index.js";
 
 export interface BirthdayRow {
-  docId:      string;        // `${jid}_${name}` (spaces→_)
+  docId:      string;        // `${jid}_${name}` (spaces=>_)
   name:       string;
   date:       string;        // "DD/MM" — what the scheduler matches on
   birthYear:  number | null; // null if user omitted the year
@@ -29,13 +22,13 @@ function mapRow(r: any): BirthdayRow {
   };
 }
 
-/** All birthdays whose "DD/MM" matches today (used by the scheduler). */
+// All birthdays whose "DD/MM" matches today (used by the scheduler).
 export async function birthdaysOnDate(ddmm: string): Promise<BirthdayRow[]> {
   const rows = await sql`SELECT * FROM birthdays WHERE bday_date = ${ddmm}`;
   return rows.map(mapRow);
 }
 
-/** Upsert a birthday (Firestore set({merge:true}) on doc id). */
+// Upsert a birthday (Firestore set({merge:true}) on doc id).
 export async function saveBirthday(b: {
   docId: string; name: string; date: string; birthYear: number | null; jid: string;
 }): Promise<void> {
@@ -52,18 +45,18 @@ export async function saveBirthday(b: {
   `;
 }
 
-/** Mark a birthday as wished for `year` (the year-lock). */
+// Mark a birthday as wished for `year` (the year-lock).
 export async function setRemindYear(docId: string, year: number): Promise<void> {
   await sql`UPDATE birthdays SET remind_year = ${year} WHERE doc_id = ${docId}`;
 }
 
-/** All birthdays (for a potential !birthday list). */
+// All birthdays (for a potential !birthday list).
 export async function allBirthdays(): Promise<BirthdayRow[]> {
   const rows = await sql`SELECT * FROM birthdays`;
   return rows.map(mapRow);
 }
 
-/** Delete a birthday by doc id. */
+// Delete a birthday by doc id.
 export async function deleteBirthday(docId: string): Promise<boolean> {
   const res = await sql`DELETE FROM birthdays WHERE doc_id = ${docId}`;
   return res.count > 0;
