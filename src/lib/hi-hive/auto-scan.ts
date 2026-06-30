@@ -6,9 +6,11 @@ import { WAMessage, WASocket, downloadContentFromMessage } from "@whiskeysockets
 import { readBarcodes } from "zxing-wasm/full";
 import { ensureZXingReady } from "./zxing-init.js";
 import { scanQr } from "./scan-qr.js";
-import type { ScanQrResult, SimpleScanQrResult } from "./types.js";
+import type { ScanQrResult } from "./types.js";
 import { getAllDocs } from "./creds.js";
 import { validateAccount, buildScheduleSlots, matchesSchedule, isAlreadyRecorded } from "./account-validation.js";
+import { canonicalCode } from "./course-aliases.js";
+import { ReportStatus, STATUS_META, fromScanStatus, formatStatusLine } from "./scan-status.js";
 import { decodeQr } from "../old-hi-hive/decode-qr.js";
 
 const VALID_QR_TYPES = ["Q01", "Q02", "E01", "LQR", "CTR"];
@@ -157,7 +159,7 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     const decoded = decodeQr(userId, extracted);
     const qrInfo  = decoded.ok ? decoded.decoded.info : undefined;
 
-    const results: [string, SimpleScanQrResult][] = [];
+    const results: [string, ReportStatus][] = [];
 
     for (const [docId, creds] of Object.entries(await getAllDocs()))
     {
@@ -169,16 +171,14 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
       const check = await validateAccount(docId, creds.id);
 
       if (!check.exists) {
-        console.log(`[autoScan] ⛔ skipping ${label}: ${check.reason}`);
-        results.push([label, { status: "rejected", datetime: new Date() }]);
+        console.log(`[autoScan] 🛑 ${label}: ${check.reason}`);
+        results.push([label, "account_unverified"]);
         continue;
       }
       console.log(`[autoScan] ✔ ${label} verified: ${check.reason}`);
 
       // ── Skip if this class is ALREADY recorded as attended ────────────────
       // Reuses the attendance we just fetched for validation (no extra call).
-      // If the class isn't recorded yet, or a previous attempt failed/was an
-      // absence, we fall through and (re)scan.
       if (check.attendance && qrInfo?.courseCode && qrInfo?.datetime) {
         const already = isAlreadyRecorded(check.attendance, {
           courseCode:   qrInfo.courseCode,
@@ -186,15 +186,26 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
           group:        qrInfo.group ?? "",
         });
         if (already.recorded) {
-          console.log(`[autoScan] ✅ ${label}: ${qrInfo.courseCode} @ ${qrInfo.datetime} already recorded — skipping re-scan`);
-          results.push([label, { status: "marked", datetime: new Date() }]);
+          console.log(`[autoScan] ☑️ ${label}: ${qrInfo.courseCode} @ ${qrInfo.datetime} already recorded — skipping`);
+          results.push([label, "already_marked"]);
+          continue;
+        }
+      }
+
+      // ── Not-enrolled check ───────────────────────────────────────────────
+      // If the student has attendance history (week 2+) and the scanned course
+      // simply isn't among their enrolled courses, skip — they don't take it.
+      // (Uses canonical codes, so dual-code classes like UECS2403/2103 count.)
+      if (qrInfo?.courseCode && check.enrolledCodes.size > 0) {
+        const wantCode = canonicalCode(qrInfo.courseCode);
+        if (!check.enrolledCodes.has(wantCode)) {
+          console.log(`[autoScan] 🚫 ${label}: not enrolled in ${qrInfo.courseCode} (${wantCode})`);
+          results.push([label, "not_enrolled"]);
           continue;
         }
       }
 
       // ── Feature 3 (optional): smart-schedule skip ────────────────────────
-      // Skip if the QR doesn't match this account's historical timetable.
-      // Off by default; needs ≥1 week of history to have any slots.
       if (SMART_SCHEDULE_SKIP && check.attendance && qrInfo?.courseCode && qrInfo?.datetime) {
         const slots = buildScheduleSlots(check.attendance);
         const fits = matchesSchedule(slots, {
@@ -203,50 +214,48 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
           group:        qrInfo.group ?? "",
         });
         if (!fits) {
-          console.log(`[autoScan] 🧠 smart-skip ${label}: QR (${qrInfo.courseCode} @ ${qrInfo.datetime}) not in known schedule`);
-          results.push([label, { status: "rejected", datetime: new Date() }]);
+          console.log(`[autoScan] 📭 ${label}: ${qrInfo.courseCode} @ ${qrInfo.datetime} not in known schedule`);
+          results.push([label, "not_in_schedule"]);
           continue;
         }
       }
 
-      // ── Submit the scan for THIS account (was a bug: used userId before) ──
+      // ── Submit the scan for THIS account ─────────────────────────────────
       const result: ScanQrResult | undefined = await scanQr(docId, extracted);
 
-      results.push([label, {
-        status: result?.status,
-        datetime: new Date(),
-      }]);
-
       if (result === undefined) {
-        console.log(`⚠️ [autoScan]: Document with ID \`${creds.id}\` is likely corrupted.`);
-        continue;
-      } else {
-        console.log(`[autoScan]: Scanning for attendance \`${creds.id}\` done! (status=${result.status})`);
+        console.log(`[autoScan] ⚠️ ${label}: no result — creds likely corrupted.`);
+        results.push([label, "scan_failed"]);
         continue;
       }
+
+      const reportStatus = fromScanStatus(result.status);
+      results.push([label, reportStatus]);
+      console.log(`[autoScan] ${label}: scan done (server=${result.status} → ${reportStatus})`);
     }
 
-    
-    // Optional helper function to format the time nicely (e.g., "14:30:05")
-    const formatTime = (date: Date) => {
-        return date.toLocaleTimeString('en-US', { hour12: false });
-    };
+    // Format the time nicely (e.g. "14:30:05")
+    const formatTime = (date: Date) => date.toLocaleTimeString("en-US", { hour12: false });
 
-    const reportLines = results.map(([studentId, result]: [string, SimpleScanQrResult]) => {
-        const time = formatTime(result.datetime);
+    const now = formatTime(new Date());
+    const reportLines = results.map(([studentId, status]) =>
+      formatStatusLine(studentId, status, now)
+    );
 
-        if (result.status === undefined) {
-            return `❌ *[${time}]* \`${studentId}\` ➔ _Failed to scan_`;
-        } else {
-            return `${result.status === 'marked' ? '✅' : '❌'} *[${time}]* \`${studentId}\` ➔ *Status:* \`${result.status}\``;
-        }
-    });
+    // Small summary tally at the top (e.g. "✅ 2 marked · ☑️ 1 already · 🚫 1 not enrolled")
+    const tally = new Map<ReportStatus, number>();
+    for (const [, s] of results) tally.set(s, (tally.get(s) ?? 0) + 1);
+    const summary = [...tally.entries()]
+      .map(([s, n]) => `${STATUS_META[s].emoji} ${n} ${STATUS_META[s].label.toLowerCase()}`)
+      .join(" · ");
 
-    const finalMessage = `📋 *AUTO SCAN REPORT*\n\n${reportLines.join('\n')}\n\n🏁 *Completed at:* \`${formatTime(new Date())}\``;
+    const finalMessage =
+      `📋 *AUTO SCAN REPORT*\n` +
+      (summary ? `${summary}\n` : "") +
+      `\n${reportLines.join("\n")}\n\n` +
+      `🏁 *Completed at:* \`${now}\``;
 
-    await sock.sendMessage(chatId, { 
-        text: finalMessage 
-    }, { quoted: msg });
+    await sock.sendMessage(chatId, { text: finalMessage }, { quoted: msg });
 
     await sock.sendMessage(chatId, { 
         react: { text: "✅", key: msg.key } 
