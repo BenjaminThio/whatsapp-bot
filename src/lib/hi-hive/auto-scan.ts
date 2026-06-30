@@ -3,13 +3,22 @@
  */
 
 import { WAMessage, WASocket, downloadContentFromMessage } from "@whiskeysockets/baileys";
-import { readBarcodes } from "zxing-wasm";
+import { readBarcodes } from "zxing-wasm/full";
+import { ensureZXingReady } from "./zxing-init.js";
 import { scanQr } from "./scan-qr.js";
 import type { ScanQrResult, SimpleScanQrResult } from "./types.js";
 import { getAllDocs } from "./creds.js";
+import { validateAccount, buildScheduleSlots, matchesSchedule, isAlreadyRecorded } from "./account-validation.js";
+import { decodeQr } from "../old-hi-hive/decode-qr.js";
 
 const VALID_QR_TYPES = ["Q01", "Q02", "E01", "LQR", "CTR"];
 const QR_SEPARATOR   = ":*:";
+
+// ── Feature 3: smart-schedule skip ────────────────────────────────────────────
+// When ON, an account's scan is skipped if the QR's course/day/time/group has
+// never appeared in that account's historical attendance (i.e. not their class).
+// OFF by default — flip with SMART_SCHEDULE_SKIP=1 once you trust it.
+const SMART_SCHEDULE_SKIP = process.env["SMART_SCHEDULE_SKIP"] === "1";
 
 const EXPIRY_EMOJI: Record<string, string> = {
   in_window: "✅",
@@ -114,6 +123,7 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
 
     // ── Read QR with zxing ──────────────────────────────────────────────────
     console.log(`[autoScan] running zxing...`);
+    ensureZXingReady();   // load local wasm (no CDN fetch) — safe to call repeatedly
     let extracted: string | null = null;
     try {
       const results = await readBarcodes(buf, {
@@ -140,60 +150,80 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     }
 
     // ── Submit attendance ───────────────────────────────────────────────────
-    console.log(`[autoScan] ✅ valid attendance QR — submitting for userId=${userId}`);
+    console.log(`[autoScan] ✅ valid attendance QR — validating accounts for userId=${userId}`);
     await sock.sendMessage(chatId, { react: { text: "⏳", key: msg.key } });
+
+    // Decode the QR once so we know its course/datetime/group (for smart-skip)
+    const decoded = decodeQr(userId, extracted);
+    const qrInfo  = decoded.ok ? decoded.decoded.info : undefined;
 
     const results: [string, SimpleScanQrResult][] = [];
 
-    for (const [_docId, creds] of Object.entries(await getAllDocs()))
+    for (const [docId, creds] of Object.entries(await getAllDocs()))
     {
-      const result: ScanQrResult | undefined = await scanQr(userId, extracted);
+      const label = creds.hidden ? "*".repeat(creds.id.length) : creds.id;
 
-      results.push([creds.hidden ? '*'.repeat(creds.id.length) : creds.id, {
+      // ── Feature 1: account-existence validation ──────────────────────────
+      // Fetch this account's attendance and confirm the profile Student ID
+      // matches its credentials. A fake account (e.g. 999999) won't match.
+      const check = await validateAccount(docId, creds.id);
+
+      if (!check.exists) {
+        console.log(`[autoScan] ⛔ skipping ${label}: ${check.reason}`);
+        results.push([label, { status: "rejected", datetime: new Date() }]);
+        continue;
+      }
+      console.log(`[autoScan] ✔ ${label} verified: ${check.reason}`);
+
+      // ── Skip if this class is ALREADY recorded as attended ────────────────
+      // Reuses the attendance we just fetched for validation (no extra call).
+      // If the class isn't recorded yet, or a previous attempt failed/was an
+      // absence, we fall through and (re)scan.
+      if (check.attendance && qrInfo?.courseCode && qrInfo?.datetime) {
+        const already = isAlreadyRecorded(check.attendance, {
+          courseCode:   qrInfo.courseCode,
+          classDatetime: qrInfo.datetime,
+          group:        qrInfo.group ?? "",
+        });
+        if (already.recorded) {
+          console.log(`[autoScan] ✅ ${label}: ${qrInfo.courseCode} @ ${qrInfo.datetime} already recorded — skipping re-scan`);
+          results.push([label, { status: "marked", datetime: new Date() }]);
+          continue;
+        }
+      }
+
+      // ── Feature 3 (optional): smart-schedule skip ────────────────────────
+      // Skip if the QR doesn't match this account's historical timetable.
+      // Off by default; needs ≥1 week of history to have any slots.
+      if (SMART_SCHEDULE_SKIP && check.attendance && qrInfo?.courseCode && qrInfo?.datetime) {
+        const slots = buildScheduleSlots(check.attendance);
+        const fits = matchesSchedule(slots, {
+          courseCode:   qrInfo.courseCode,
+          classDatetime: qrInfo.datetime,
+          group:        qrInfo.group ?? "",
+        });
+        if (!fits) {
+          console.log(`[autoScan] 🧠 smart-skip ${label}: QR (${qrInfo.courseCode} @ ${qrInfo.datetime}) not in known schedule`);
+          results.push([label, { status: "rejected", datetime: new Date() }]);
+          continue;
+        }
+      }
+
+      // ── Submit the scan for THIS account (was a bug: used userId before) ──
+      const result: ScanQrResult | undefined = await scanQr(docId, extracted);
+
+      results.push([label, {
         status: result?.status,
-        datetime: new Date()
+        datetime: new Date(),
       }]);
 
-      if (result === undefined)
-      {
-        console.log(`⚠️ [autoScan]: Document with ID \`${creds.id}\` is likely corrupted.`)
-        continue;
-      }
-      else
-      {
-        console.log(`[autoScan]: Scanning for attendance \`${creds.id}\` done!`);
-        continue;
-      }
-      /*
       if (result === undefined) {
-        await sock.sendMessage(chatId, {
-          text: "⚠️ *Auto-scan:* Creds not set. Please configure your hi_hive Firestore document.",
-        }, { quoted: msg });
-        await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
-        return true;
-      }
-
-      const caption  = formatResult(result);
-      const imageUrl = (result as any).imageUrl as string | null;
-
-      if (imageUrl) {
-        try {
-          const imgRes = await fetch(imageUrl);
-          const imgBuf = Buffer.from(await imgRes.arrayBuffer());
-          await sock.sendMessage(chatId, {
-            image: imgBuf, caption, mimetype: "image/png",
-          }, { quoted: msg });
-        } catch {
-          await sock.sendMessage(chatId, { text: caption }, { quoted: msg });
-        }
+        console.log(`⚠️ [autoScan]: Document with ID \`${creds.id}\` is likely corrupted.`);
+        continue;
       } else {
-        await sock.sendMessage(chatId, { text: caption }, { quoted: msg });
+        console.log(`[autoScan]: Scanning for attendance \`${creds.id}\` done! (status=${result.status})`);
+        continue;
       }
-
-      await sock.sendMessage(chatId, {
-        react: { text: result.ok ? "✅" : "❌", key: msg.key },
-      });
-      */
     }
 
     

@@ -45,6 +45,11 @@ export interface GetAttendanceOptions {
   reportUrl?: string;
   courseCode?: string;
   credsPath?: string;
+  /**
+   * Override: use these raw credentials directly instead of loading from the DB.
+   * Lets us validate id+email that haven't been saved yet (e.g. before !test add).
+   */
+  creds?: { id: string; email: string };
 }
 
 export async function getAttendance(
@@ -61,13 +66,15 @@ export async function getAttendance(
   // ── Resolve token ─────────────────────────────────────────────────────────
   // Always generate fresh from id + email + current datetime — never use stored token.
   // Formula: AES-128-CBC( studentId + "FFF" + email + "FFF" + datetime + "FFF" )
-  const creds = await loadCreds(userId);
+  // If options.creds is given, use it directly (validates unsaved credentials);
+  // otherwise load from the database by userId.
+  const creds = options.creds ?? await loadCreds(userId);
 
   if (creds === undefined) return undefined;
 
   if (!creds.id || !creds.email) {
     return errResult(
-      "Missing id or email in Firestore hi_hive document. Both are required to generate a token."
+      "Missing id or email — both are required to generate a token."
     );
   }
 

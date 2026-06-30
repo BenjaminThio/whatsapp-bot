@@ -1,5 +1,6 @@
 import { WAMessage } from "@whiskeysockets/baileys";
-import { writeBarcode } from "zxing-wasm";
+import { writeBarcode } from "zxing-wasm/full";
+import { ensureZXingReady } from "../lib/hi-hive/zxing-init.js";
 import { Command } from "./_types.js";
 import { loadCreds } from "../lib/old-hi-hive/creds.js";
 import { aesEncrypt } from "../lib/old-hi-hive/crypto.js";
@@ -108,6 +109,7 @@ function usageFor(type: QrType): string {
 // ─── QR image generator ───────────────────────────────────────────────────────
 
 async function buildQrImage(rawQrString: string): Promise<Buffer> {
+    ensureZXingReady();
     const result = await writeBarcode(rawQrString, {
         format: "QRCode",
         scale: 3,

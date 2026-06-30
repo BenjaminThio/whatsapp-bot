@@ -1,6 +1,7 @@
 import { WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { Command } from "./_types.js";
 import { addAnonymousCreds, deleteCreds, exists, getAnonymousDocIds, getRelatedDocIds, loadCreds, looseLoadCreds, saveCreds } from "../lib/hi-hive/creds.js";
+import { validateRawCreds } from "../lib/hi-hive/account-validation.js";
 import { handleScanAttendance } from "./scan.js";
 import { getAttendance } from "../lib/hi-hive/get-attendance.js";
 import { formatAttendance } from "./attendance.js";
@@ -17,7 +18,9 @@ export interface Creds
 const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt'] as const;
 type Subcommand = typeof SUBCOMMANDS[number];
 const ID_REGEX: RegExp = /^\d{7}$/;
-const EMAIL_REGEX: RegExp = /^[a-zA-Z0-9._%+-]+@1utar\.my$/i;
+const ALLOWED_DOMAINS = ["1utar.my", "gmail.com"];
+const domainPattern = ALLOWED_DOMAINS.map(d => d.replace(/\./g, "\\.")).join("|");
+const EMAIL_REGEX = new RegExp(`^[a-zA-Z0-9._%+-]+@(${domainPattern})$`, "i");
 
 function isSubcommand(value: string): value is Subcommand 
 {
@@ -95,6 +98,14 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
         if (!isCredsValid(id, email))
             return;
 
+        // Verify the account actually exists on hi-hive before saving (blocks fakes)
+        await sock.sendMessage(chatId, { text: '🔎 Verifying account with hi-hive...' });
+        const check = await validateRawCreds(id, email);
+        if (!check.valid) {
+            await sock.sendMessage(chatId, { text: `🚫 *Not added.* ${check.reason}` });
+            return;
+        }
+
         const newCreds: Creds = {
             id: id,
             email: email,
@@ -111,6 +122,14 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
         if (!isCredsValid(id, email))
             return;
 
+        // Verify the account actually exists on hi-hive before saving (blocks fakes)
+        await sock.sendMessage(chatId, { text: '🔎 Verifying account with hi-hive...' });
+        const check = await validateRawCreds(id, email);
+        if (!check.valid) {
+            await sock.sendMessage(chatId, { text: `🚫 *Not saved.* ${check.reason}` });
+            return;
+        }
+
         const creds: Creds = {
             id: id,
             email: email,
@@ -124,7 +143,7 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
 
         await saveCreds(anonymousId ?? userId, creds);
 
-        sock.sendMessage(chatId, { text: `${ hidden === undefined ? '⚠️ *Warning:* Hidden value provided is incorrect, proceed fallback to `false`.\n\n' : '' }👤 *${anonymousId === undefined ? 'Personal' : 'Anonymous'} Info Set!*\n🫆 Student ID: \`${creds.id}\`\n📧 Utar Email: \`${creds.email}\`${anonymousId !== undefined ? `\n🆔 Doc ID: \`${anonymousId}\`` : ''}${creds.ownerId !== undefined ? `\n🌐 Onwer ID: \`${userId}\`` : ''}` });
+        sock.sendMessage(chatId, { text: `${ hidden === undefined ? '⚠️ *Warning:* Hidden value provided is incorrect or undefined, proceed fallback to `false`.\n\n' : '' }👤 *${anonymousId === undefined ? 'Personal' : 'Anonymous'} Info Set!*\n🫆 Student ID: \`${creds.id}\`\n📧 Utar Email: \`${creds.email}\`${anonymousId !== undefined ? `\n🆔 Doc ID: \`${anonymousId}\`` : ''}${creds.ownerId !== undefined ? `\n🌐 Onwer ID: \`${userId}\`` : ''}` });
     }
 
     async function getAttendanceReport(docId: string, courseFilter: string | undefined)

@@ -1,5 +1,6 @@
 import { WAMessage, downloadContentFromMessage } from "@whiskeysockets/baileys";
-import { readBarcodes } from "zxing-wasm";
+import { readBarcodes } from "zxing-wasm/full";
+import { ensureZXingReady } from "../lib/hi-hive/zxing-init.js";
 import { Command } from "./_types.js";
 import { decodeQr } from "../lib/old-hi-hive/decode-qr.js";
 import type { DecodedQr } from "../lib/old-hi-hive/types.js";
@@ -56,6 +57,7 @@ async function downloadImage(imageMessage: any): Promise<Buffer> {
 
 async function scanQR(imageInput: Uint8Array): Promise<string | null> {
     try {
+        ensureZXingReady();
         const results = await readBarcodes(imageInput, {
             tryHarder: true,
             formats: ["QRCode"],

@@ -1,5 +1,6 @@
 import { WAMessage, WASocket, downloadContentFromMessage } from "@whiskeysockets/baileys";
-import { readBarcodes, writeBarcode } from "zxing-wasm";
+import { readBarcodes, writeBarcode } from "zxing-wasm/full";
+import { ensureZXingReady } from "../lib/hi-hive/zxing-init.js";
 import { Command } from "./_types.js";
 import { scanQr } from "../lib/hi-hive/scan-qr.js";
 import type { ScanQrResult } from "../lib/hi-hive/types.js";
@@ -19,6 +20,7 @@ import type { ScanQrResult } from "../lib/hi-hive/types.js";
 
 async function createQR(link: string): Promise<Blob | null> {
     try {
+        ensureZXingReady();
         const writeResult = await writeBarcode(link, {
             format: "QRCode",
             scale: 3,
@@ -33,6 +35,7 @@ async function createQR(link: string): Promise<Blob | null> {
 
 async function scanQR(imageInput: File | Blob | ArrayBuffer | Uint8Array): Promise<string | null> {
     try {
+        ensureZXingReady();
         const readResults = await readBarcodes(imageInput, {
             tryHarder: true,
             formats: ["QRCode"],
@@ -352,7 +355,7 @@ export default command;
 
 /*
 import { WAMessage, WASocket, downloadContentFromMessage } from "@whiskeysockets/baileys";
-import { readBarcodes, writeBarcode } from "zxing-wasm";
+import { readBarcodes, writeBarcode } from "zxing-wasm/full";
 import { Command } from "./_types.js";
 import { scanQr } from "../lib/hi-hive/scan-qr.js";
 import type { ScanQrResult } from "../lib/hi-hive/types.js";
@@ -361,6 +364,7 @@ import type { ScanQrResult } from "../lib/hi-hive/types.js";
 
 async function createQR(link: string): Promise<Blob | null> {
     try {
+        ensureZXingReady();
         const writeResult = await writeBarcode(link, {
             format: "QRCode",
             scale: 3,
