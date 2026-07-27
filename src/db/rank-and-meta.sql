@@ -5,3 +5,7 @@ ALTER TABLE scan_buffer ADD COLUMN IF NOT EXISTS scanned_by    TEXT;
 -- QR contribution counter: how many QRs this student has supplied.
 ALTER TABLE hi_hive ADD COLUMN IF NOT EXISTS contributions INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_hihive_contrib ON hi_hive (contributions DESC);
+
+-- One-time report claim: guarantees exactly one report per batch even if two
+-- workers finish the last jobs at the same moment.
+ALTER TABLE scan_buffer ADD COLUMN IF NOT EXISTS reported BOOLEAN NOT NULL DEFAULT FALSE;

@@ -165,3 +165,21 @@ export async function getRankings(limit = 25): Promise<RankRow[]> {
     contributions: Number(r.contributions),
   }));
 }
+
+
+/**
+ * Atomically claim the right to send this batch's report.
+ *
+ * Returns true for exactly ONE caller. Concurrent workers that finish the last
+ * jobs at the same instant will get false, so the report can never be sent
+ * twice — which is what caused the duplicate-report spam.
+ */
+export async function claimBatchReport(batchId: string): Promise<boolean> {
+  const rows = await sql`
+    UPDATE scan_buffer
+    SET reported = TRUE
+    WHERE batch_id = ${batchId} AND reported = FALSE
+    RETURNING id
+  `;
+  return rows.length > 0;
+}

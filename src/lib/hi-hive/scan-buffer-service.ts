@@ -23,7 +23,7 @@
  */
 
 import {
-  dueJobs, markDone, batchPendingCount, batchRows, deleteBatch, purgeStale,
+  dueJobs, markDone, batchPendingCount, batchRows, deleteBatch, purgeStale, claimBatchReport,
   type BufferRow,
 } from "./scan-buffer-db.js";
 import { scanOneAccount } from "./scan-runner.js";
@@ -34,6 +34,7 @@ import { includesStudent, includesStatus, scannedByHeader, type Destination } fr
 const TICK_MS = Number(process.env["SCAN_BUFFER_TICK_MS"] ?? 500);
 
 let started = false;                 // guard: reconnects must not stack pollers
+let ticking = false;                 // guard: ticks must never overlap
 const inFlight = new Set<string>();  // jobs currently being processed
 
 const clock = (d: Date) => d.toLocaleTimeString("en-US", { hour12: false });
@@ -69,6 +70,16 @@ export function startScanBufferService(sock: any) {
   console.log("🗓️ Scan buffer service started (persisted queue).");
 
   const tick = async () => {
+    /*
+    Ticks MUST NOT overlap. Each scan is a real HTTP request taking seconds,
+    while the interval fires every few hundred ms — so without this guard several
+    ticks run at once, each finishing a different job and then independently
+    deciding the batch is complete. That race is what sent the report once per
+    account instead of once per batch.
+    */
+    if (ticking) return;
+    ticking = true;
+
     try {
       const jobs = await dueJobs();
       if (jobs.length === 0) return;
@@ -94,6 +105,13 @@ export function startScanBufferService(sock: any) {
           // Last job of the batch? Send the report and clean up.
           const remaining = await batchPendingCount(job.batchId);
           if (remaining === 0) {
+            // Second line of defence: only ONE worker may ever report a batch.
+            // If another already claimed it, stop here silently.
+            if (!(await claimBatchReport(job.batchId))) {
+              console.log(`[scanBuffer] batch ${job.batchId} already reported — skipping duplicate.`);
+              continue;
+            }
+
             const rows = await batchRows(job.batchId);
 
             // Destinations were resolved and stored when the batch was queued.
@@ -102,7 +120,10 @@ export function startScanBufferService(sock: any) {
               { chatId: job.chatId, status: "all", isOrigin: true },
             ];
 
+            console.log(`[scanBuffer] batch ${job.batchId}: ${dests.length} destination(s) to report to.`);
+
             for (const dest of dests) {
+             try {
               // 1. Which students does this destination care about?
               let mine = rows.filter(r => includesStudent(dest, r.studentId));
 
@@ -143,7 +164,11 @@ export function startScanBufferService(sock: any) {
                 }
               }
 
-              console.log(`[scanBuffer] report → ${dest.chatId} (${mine.length} student(s))`);
+              console.log(`[scanBuffer] ✉️ report → ${dest.chatId} (${mine.length} student(s))`);
+             } catch (destErr) {
+               // One bad destination must not stop the others from being told.
+               console.error(`[scanBuffer] destination ${dest.chatId} failed:`, destErr);
+             }
             }
 
             /*
@@ -180,6 +205,8 @@ export function startScanBufferService(sock: any) {
       }
     } catch (err) {
       console.error("[scanBuffer] tick error:", err);
+    } finally {
+      ticking = false;
     }
   };
 

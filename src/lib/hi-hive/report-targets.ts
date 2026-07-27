@@ -115,12 +115,29 @@ export async function resolveDestinations(
       console.log(`[reportTargets] whitelisted group ${chatId} → full report`);
     } else {
       // Non-whitelisted group — scan silently, thank the sender with ❤️
-      console.log(`[reportTargets] group ${chatId} not whitelisted → silent (❤️ only)`);
+      console.log(`[reportTargets] group ${chatId} not whitelisted → silent (❤️ only), ` +
+        `${destinations.length} configured destination(s) still notified`);
       return { destinations, originSilent: true };
     }
   }
 
-  return { destinations, originSilent: false };
+  // Dedupe by chatId — if a configured entry and the origin are the same chat,
+  // the configured rule wins and we must not send twice.
+  const seen = new Set<string>();
+  const deduped = destinations.filter(d => {
+    if (seen.has(d.chatId)) return false;
+    seen.add(d.chatId);
+    return true;
+  });
+
+  console.log(`[reportTargets] resolved ${deduped.length} destination(s):`);
+  for (const d of deduped) {
+    console.log(`   → ${d.chatId} origin=${d.isOrigin} ` +
+      `filter=${d.filterIds ? d.filterIds.join(",") : "ALL"} ` +
+      `status=${d.status === "all" ? "all" : d.status.join("/")} showDelay=${d.showDelay}`);
+  }
+
+  return { destinations: deduped, originSilent: false };
 }
 
 /** Does this destination want a student included? */
