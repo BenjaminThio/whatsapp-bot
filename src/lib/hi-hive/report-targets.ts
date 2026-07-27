@@ -200,6 +200,39 @@ export function includesStatus(dest: Destination, status: ReportStatus): boolean
  * hidden) and the doc id to credit, when the sender's jid maps to a stored
  * account.
  */
+/**
+ * Find stored creds for a jid, tolerating the different forms WhatsApp uses.
+ *
+ * The same person can appear as:
+ *   210977484189809@lid            ← how creds are usually keyed
+ *   601118985323@s.whatsapp.net    ← phone form
+ *   601118985323:18@s.whatsapp.net ← with a device suffix
+ *
+ * An exact-string lookup misses all but one of those, so we also compare the
+ * user part (before "@", minus any ":device") against every stored doc id.
+ */
+async function findCredsForJid(jid: string): Promise<{ docId: string; creds: any } | null> {
+  // 1. Exact match — the common case
+  try {
+    const creds = await loadCreds(jid);
+    if (creds) return { docId: jid, creds };
+  } catch { /* fall through */ }
+
+  // 2. Match on the user part, ignoring server and device suffix
+  const userPart = jid.split("@")[0].split(":")[0];
+  if (!userPart) return null;
+
+  try {
+    const all = await getAllDocs();
+    for (const [docId, creds] of Object.entries(all)) {
+      const docUser = docId.split("@")[0].split(":")[0];
+      if (docUser === userPart) return { docId, creds };
+    }
+  } catch { /* ignore */ }
+
+  return null;
+}
+
 export async function resolveScannedBy(
   sock: WASocket,
   msg: WAMessage,
@@ -208,26 +241,38 @@ export async function resolveScannedBy(
   const isGroup = chatId.endsWith("@g.us");
   const ownId   = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
   const ownLid  = (sock.user as any)?.lid ? jidNormalizedUser((sock.user as any).lid) : null;
+  const rawOwn  = sock.user?.id ?? null;
+  const rawLid  = (sock.user as any)?.lid ?? null;
 
-  // Sender jid: the participant in a group, otherwise whichever side sent it
+  // Who sent it: the group participant, otherwise whichever side of the PM
   const senderJid = isGroup
     ? (msg.key.participant ?? null)
     : (msg.key.fromMe ? (ownId ?? ownLid) : chatId);
 
-  for (const jid of [senderJid, ownLid, ownId]) {
-    if (!jid) continue;
-    try {
-      const creds = await loadCreds(jid);
-      if (creds) {
-        return {
-          label: creds.hidden ? "Hidden User" : creds.id,
-          docId: jid,
-        };
-      }
-    } catch { /* keep trying */ }
-    if (jid === senderJid) break;   // only fall back for the bot's own ids
+  /*
+  Candidates in priority order. When the message is fromMe the sender IS the bot
+  owner, so their own lid/phone forms are legitimate fallbacks — a previous
+  version broke out of this loop after the first entry, which is why everything
+  came back as "Unknown User".
+  */
+  const candidates: (string | null)[] = [senderJid];
+  if (msg.key.fromMe || !isGroup) {
+    candidates.push(ownLid, ownId, rawLid, rawOwn);
   }
 
+  for (const jid of candidates) {
+    if (!jid) continue;
+    const hit = await findCredsForJid(jid);
+    if (hit) {
+      console.log(`[reportTargets] scanned by ${hit.creds.id} (matched ${jid} → doc ${hit.docId})`);
+      return {
+        label: hit.creds.hidden ? "Hidden User" : hit.creds.id,
+        docId: hit.docId,
+      };
+    }
+  }
+
+  console.log(`[reportTargets] scanned by UNKNOWN — tried: ${candidates.filter(Boolean).join(", ")}`);
   return { label: "Unknown User", docId: null };
 }
 
