@@ -30,14 +30,14 @@ const MAX_PER_CHAT = 25;
 const MAX_FUTURE_MS = 366 * 24 * 3_600_000;   // 1 year ahead
 
 /*
-Escalation intensity levels - pick one with --escalate=<level>.
+Escalation intensity levels — pick one with --escalate=<level>.
 Each is a list of how long BEFORE the deadline a ping fires. Only milestones
 still in the future at creation time get scheduled, so a near deadline auto-skips
-the far pings. You fully control these - add/remove rows to taste.
+the far pings. You fully control these — add/remove rows to taste.
 
-  light      - minimal nagging, just the essentials
-  balanced   - sensible default for most deadlines (exams, assignments)
-  aggressive - frequent pings, for things you absolutely cannot miss
+  light      — minimal nagging, just the essentials
+  balanced   — sensible default for most deadlines (exams, assignments)
+  aggressive — frequent pings, for things you absolutely cannot miss
 */
 type Milestone = { offset: number; label: string };
 
@@ -46,7 +46,7 @@ const ESCALATION_LEVELS: Record<string, Milestone[]> = {
         { offset: 1 * 24 * 3_600_000, label: "1 day left"  },
         { offset: 3 * 3_600_000,      label: "3 hours left" },
         { offset: 1 * 3_600_000,      label: "1 hour left"  },
-        { offset: 0,                  label: "Now / due"    },
+        { offset: 0,                  label: "deadline"     },
     ],
     balanced: [
         { offset: 7 * 24 * 3_600_000, label: "1 week left"   },
@@ -54,7 +54,7 @@ const ESCALATION_LEVELS: Record<string, Milestone[]> = {
         { offset: 12 * 3_600_000,     label: "12 hours left" },
         { offset: 3 * 3_600_000,      label: "3 hours left"  },
         { offset: 1 * 3_600_000,      label: "1 hour left"   },
-        { offset: 0,                  label: "Now / due"     },
+        { offset: 0,                  label: "deadline"      },
     ],
     aggressive: [
         { offset: 7 * 24 * 3_600_000, label: "1 week left"    },
@@ -65,7 +65,7 @@ const ESCALATION_LEVELS: Record<string, Milestone[]> = {
         { offset: 3 * 3_600_000,      label: "3 hours left"   },
         { offset: 1 * 3_600_000,      label: "1 hour left"    },
         { offset: 30 * 60_000,        label: "30 minutes left" },
-        { offset: 0,                  label: "Now / due"      },
+        { offset: 0,                  label: "deadline"       },
     ],
 };
 
@@ -74,16 +74,16 @@ const DEFAULT_LEVEL = "balanced";
 const MAX_ESCALATION_DOCS = Math.max(...Object.values(ESCALATION_LEVELS).map(l => l.length));
 
 /*
-"auto" level - adapts the cadence to how far away the deadline is.
+"auto" level — adapts the cadence to how far away the deadline is.
 
-A full ladder of candidate offsets (1 month => 30 min => deadline). For a given
+A full ladder of candidate offsets (1 month → 30 min → deadline). For a given
 runway we keep only offsets smaller than 60% of the total time, so the first
 ping is never too early and the cadence naturally densifies toward the deadline.
 
-  3-month project => month, 2 weeks, week, 3 days, day, 12h, 3h, 1h, 30m, due
-  3-day task      => day, 12h, 3h, 1h, 30m, due
-  4-hour task     => 1h, 30m, due
-  20-min task     => due only
+  3-month project → month, 2 weeks, week, 3 days, day, 12h, 3h, 1h, 30m, due
+  3-day task      → day, 12h, 3h, 1h, 30m, due
+  4-hour task     → 1h, 30m, due
+  20-min task     → due only
 */
 const AUTO_LADDER: Milestone[] = [
     { offset: 30 * 24 * 3_600_000, label: "1 month left"    },
@@ -95,11 +95,11 @@ const AUTO_LADDER: Milestone[] = [
     { offset: 3 * 3_600_000,       label: "3 hours left"    },
     { offset: 1 * 3_600_000,       label: "1 hour left"     },
     { offset: 30 * 60_000,         label: "30 minutes left" },
-    { offset: 0,                   label: "Now / due"       },
+    { offset: 0,                   label: "deadline"        },
 ];
 
 // How small a ping's offset must be relative to the runway to be included.
-// 0.6 => the first ping fires once ~40% of the runway has elapsed.
+// 0.6 → the first ping fires once ~40% of the runway has elapsed.
 const AUTO_RUNWAY_FACTOR = 0.6;
 
 /**
@@ -108,7 +108,7 @@ const AUTO_RUNWAY_FACTOR = 0.6;
  */
 function computeAutoMilestones(runwayMs: number): Milestone[] {
     const picked = AUTO_LADDER.filter(m => m.offset === 0 || m.offset < runwayMs * AUTO_RUNWAY_FACTOR);
-    return picked.length > 0 ? picked : [{ offset: 0, label: "Now / due" }];
+    return picked.length > 0 ? picked : [{ offset: 0, label: "deadline" }];
 }
 
 // Valid level names for the flag (the fixed ones plus "auto")
@@ -132,13 +132,14 @@ async function fireReminder(sock: any, id: string, data: ScheduleDoc, overdueMs 
 
         let text: string;
         if (data.groupId && data.deadlineAt) {
-            // Escalating reminder - show urgency + exact time remaining to deadline
-            const isDue = data.milestoneLabel === "Now / due" || data.deadlineAt - Date.now() <= 60_000;
+            // Escalating reminder — show urgency + exact time remaining to deadline
+            // Labels are lead-time based now, so decide "due" purely by the clock
+            const isDue = data.deadlineAt - Date.now() <= 60_000;
             const header = isDue ? "🚨 *DUE NOW!*" : "⏰ *Deadline Reminder*";
             const remaining = humanRemaining(data.deadlineAt - Date.now());
             const countdown = isDue
                 ? ""
-                : `\n⏳ *${data.milestoneLabel}* - deadline in ${remaining}`;
+                : `\n⏳ *${data.milestoneLabel}* — deadline in ${remaining}`;
             text =
                 `${header}\n\n📌 ${data.activity}\n` +
                 `🎯 Deadline: ${formatDateTime(data.deadlineAt)}${countdown}${overdueNote}`;
@@ -154,6 +155,29 @@ async function fireReminder(sock: any, id: string, data: ScheduleDoc, overdueMs 
     } finally {
         armed.delete(id);
     }
+}
+
+
+/*
+Label a ping by how far it is from the moment the reminder is CREATED — not by
+how far it is before the deadline. So a 12-hour reminder created now produces
+"9 hours left", "11 hours left", "12 hours left" for pings at +9h, +11h, +12h.
+The final deadline ping uses the same format (no "Now / due").
+*/
+function leadTimeLabel(msFromNow: number): string {
+    const mins = Math.max(0, Math.round(msFromNow / 60_000));
+
+    if (mins < 60) {
+        return `${mins} minute${mins === 1 ? "" : "s"} left`;
+    }
+
+    const hours = Math.round(mins / 60);
+    if (hours < 48) {
+        return `${hours} hour${hours === 1 ? "" : "s"} left`;
+    }
+
+    const days = Math.round(hours / 24);
+    return `${days} day${days === 1 ? "" : "s"} left`;
 }
 
 // Human-readable "time remaining" for escalation countdowns
@@ -225,11 +249,11 @@ async function listSchedules(sock: any, msg: WAMessage) {
     for (const it of oneShots) {
         entries.push({
             sortAt: it.fireAt,
-            text: `• \`${it.id.slice(0, 6)}\` - ${formatDateTime(it.fireAt)}\n  📌 ${it.activity}`,
+            text: `• \`${it.id.slice(0, 6)}\` — ${formatDateTime(it.fireAt)}\n  📌 ${it.activity}`,
         });
     }
 
-    // Escalation groups - collapse into a single entry showing the next ping
+    // Escalation groups — collapse into a single entry showing the next ping
     for (const [groupId, docs] of groups) {
         docs.sort((a: ScheduleWithId, b: ScheduleWithId) => a.fireAt - b.fireAt);
         const next = docs[0];
@@ -238,7 +262,7 @@ async function listSchedules(sock: any, msg: WAMessage) {
         entries.push({
             sortAt: deadline,
             text:
-                `• \`${groupId.slice(0, 6)}\` 🎯 *escalating* - deadline ${formatDateTime(deadline)}\n` +
+                `• \`${groupId.slice(0, 6)}\` 🎯 *escalating* — deadline ${formatDateTime(deadline)}\n` +
                 `  📌 ${next.activity}\n` +
                 `  ⏳ next ping: ${formatDateTime(next.fireAt)} (${remainingPings} ping${remainingPings === 1 ? "" : "s"} left)`,
         });
@@ -313,10 +337,10 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
     }
 
     // Detect the escalation flag and optional level:
-    //   --escalate            => balanced (default)
-    //   --escalate=light      => light
-    //   --escalate=aggressive => aggressive
-    //   -e=light / -e         => same, short form
+    //   --escalate            → balanced (default)
+    //   --escalate=light      → light
+    //   --escalate=aggressive → aggressive
+    //   -e=light / -e         → same, short form
     let escalate = false;
     let escalateLevel = DEFAULT_LEVEL;
     let working = raw;
@@ -327,7 +351,7 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
         if (requested && VALID_LEVELS.includes(requested)) {
             escalateLevel = requested;
         } else if (requested) {
-            // Unknown level - tell the user the valid options
+            // Unknown level — tell the user the valid options
             await sock.sendMessage(msg.key.remoteJid, {
                 text:
                     `❌ Unknown escalation level: \`${requested}\`\n\n` +
@@ -387,10 +411,10 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
     }
 
     // Cap pending reminders per chat (count groups as 1 toward the cap visually,
-    // but each doc still counts - so check against the raw doc count + what we'd add)
+    // but each doc still counts — so check against the raw doc count + what we'd add)
     const pendingTotal = await pendingCount(msg.key.remoteJid);
 
-    // Escalating reminder: expand into one doc per future milestone
+    // ── Escalating reminder: expand into one doc per future milestone ─────────
     if (escalate) {
         const deadline = parsed.epochMs;
 
@@ -401,12 +425,16 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
 
         // Build the list of milestone fire-times that are still in the future
         const milestones = offsets
-            .map(m => ({ fireAt: deadline - m.offset, label: m.label }))
+            .map(m => {
+                const fireAt = deadline - m.offset;
+                // Label by lead time from NOW, not by distance before the deadline
+                return { fireAt, label: leadTimeLabel(fireAt - now) };
+            })
             .filter(m => m.fireAt > now);   // skip milestones already in the past
 
         // Always guarantee at least the deadline itself fires
         if (milestones.length === 0) {
-            milestones.push({ fireAt: deadline, label: "Now / due" });
+            milestones.push({ fireAt: deadline, label: leadTimeLabel(deadline - now) });
         }
 
         if (pendingTotal + milestones.length > MAX_PER_CHAT) {
@@ -450,7 +478,7 @@ async function handleSchedule(sock: any, msg: WAMessage, text: string) {
         return;
     }
 
-    // Plain one-shot reminder (unchanged)
+    // ── Plain one-shot reminder (unchanged) ──────────────────────────────────
     if (pendingTotal >= MAX_PER_CHAT) {
         await sock.sendMessage(msg.key.remoteJid, {
             text: `❌ This chat already has ${MAX_PER_CHAT} pending reminders. Cancel some first.`

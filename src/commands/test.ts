@@ -1,12 +1,13 @@
 import { WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { Command } from "./_types.js";
 import { addAnonymousCreds, deleteCreds, exists, getAnonymousDocIds, getRelatedDocIds, loadCreds, looseLoadCreds, saveCreds } from "../lib/hi-hive/creds.js";
-import { validateRawCreds } from "../lib/hi-hive/account-validation.js";
 import { handleScanAttendance } from "./scan.js";
 import { getAttendance } from "../lib/hi-hive/get-attendance.js";
 import { formatAttendance } from "./attendance.js";
 import { decryptData, generateEncryptedData } from "../lib/hi-hive/scan-qr.js";
-import { addWhitelist, removeWhitelist, listWhitelist, isWhitelisted } from "../lib/hi-hive/scan-buffer-db.js";
+import { addWhitelist, removeWhitelist, listWhitelist } from "../lib/hi-hive/scan-buffer-db.js";
+import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../lib/hi-hive/timetable.js";
+import { renderTimetablePng } from "../lib/hi-hive/visualise.js";
 
 export interface Creds
 {
@@ -16,12 +17,10 @@ export interface Creds
     ownerId?: string;
 }
 
-const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl'] as const;
+const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v'] as const;
 type Subcommand = typeof SUBCOMMANDS[number];
 const ID_REGEX: RegExp = /^\d{7}$/;
-const ALLOWED_DOMAINS = ["1utar.my", "gmail.com"];
-const domainPattern = ALLOWED_DOMAINS.map(d => d.replace(/\./g, "\\.")).join("|");
-const EMAIL_REGEX = new RegExp(`^[a-zA-Z0-9._%+-]+@(${domainPattern})$`, "i");
+const EMAIL_REGEX: RegExp = /^[a-zA-Z0-9._%+-]+@1utar\.my$/i;
 
 function isSubcommand(value: string): value is Subcommand 
 {
@@ -99,14 +98,6 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
         if (!isCredsValid(id, email))
             return;
 
-        // Verify the account actually exists on hi-hive before saving (blocks fakes)
-        await sock.sendMessage(chatId, { text: '🔎 Verifying account with hi-hive...' });
-        const check = await validateRawCreds(id, email);
-        if (!check.valid) {
-            await sock.sendMessage(chatId, { text: `🚫 *Not added.* ${check.reason}` });
-            return;
-        }
-
         const newCreds: Creds = {
             id: id,
             email: email,
@@ -123,14 +114,6 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
         if (!isCredsValid(id, email))
             return;
 
-        // Verify the account actually exists on hi-hive before saving (blocks fakes)
-        await sock.sendMessage(chatId, { text: '🔎 Verifying account with hi-hive...' });
-        const check = await validateRawCreds(id, email);
-        if (!check.valid) {
-            await sock.sendMessage(chatId, { text: `🚫 *Not saved.* ${check.reason}` });
-            return;
-        }
-
         const creds: Creds = {
             id: id,
             email: email,
@@ -144,7 +127,7 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
 
         await saveCreds(anonymousId ?? userId, creds);
 
-        sock.sendMessage(chatId, { text: `${ hidden === undefined ? '⚠️ *Warning:* Hidden value provided is incorrect or undefined, proceed fallback to `false`.\n\n' : '' }👤 *${anonymousId === undefined ? 'Personal' : 'Anonymous'} Info Set!*\n🫆 Student ID: \`${creds.id}\`\n📧 Utar Email: \`${creds.email}\`${anonymousId !== undefined ? `\n🆔 Doc ID: \`${anonymousId}\`` : ''}${creds.ownerId !== undefined ? `\n🌐 Onwer ID: \`${userId}\`` : ''}` });
+        sock.sendMessage(chatId, { text: `${ hidden === undefined ? '⚠️ *Warning:* Hidden value provided is incorrect, proceed fallback to `false`.\n\n' : '' }👤 *${anonymousId === undefined ? 'Personal' : 'Anonymous'} Info Set!*\n🫆 Student ID: \`${creds.id}\`\n📧 Utar Email: \`${creds.email}\`${anonymousId !== undefined ? `\n🆔 Doc ID: \`${anonymousId}\`` : ''}${creds.ownerId !== undefined ? `\n🌐 Onwer ID: \`${userId}\`` : ''}` });
     }
 
     async function getAttendanceReport(docId: string, courseFilter: string | undefined)
@@ -173,6 +156,18 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
             }, { quoted: msg });
             await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
         }
+    }
+
+    /** Resolve a user-supplied id (doc id, student id or email) to a real doc id. */
+    async function resolveDocId(input: string | undefined): Promise<string | undefined>
+    {
+        const key = (input ?? userId).trim();
+
+        if (await exists(key))
+            return key;
+
+        const related: string[] = await getRelatedDocIds(key);
+        return related.length > 0 ? related[0] : undefined;
     }
 
     async function deleteCredentials(docId: string)
@@ -400,7 +395,12 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
                         '- !test <delete | del | d> <Creds Doc Ref ID>',
                         '- !test <list | l>',
                         '- !test <help | h>',
-                        '- !test <token | t>'
+                        '- !test <token | t>',
+                        '- !test <whitelist | wl>',
+                        '- !test <whitelist | wl> list',
+                        '- !test <whitelist | wl> remove [Group JID]',
+                        '- !test <isolated | iso> [Student ID | Doc ID]',
+                        '- !test <visualise | vis | v> [Student ID | Doc ID]'
                     ];
 
                     sock.sendMessage(chatId, { text: `*All Valid Formats*\n${allSubcommandFormats.join('\n')}` });
@@ -452,37 +452,143 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
                 case 'whitelist':
                 case 'wl':
                 {
-                    const action = (params[1] ?? '').toLowerCase();
+                    const action: string = (params[1] ?? '').toLowerCase();
 
-                    if (action === 'remove' || action === 'rm') {
-                        const target = params[2] ?? chatId;
-                        const ok = await removeWhitelist(target);
-                        await sock.sendMessage(chatId, {
-                            text: ok
-                                ? `🗑️ Removed from whitelist:\n\`${target}\``
-                                : `❔ That chat was not whitelisted:\n\`${target}\``
-                        });
-                        break;
+                    if (action === 'remove' || action === 'rm')
+                    {
+                        const target: string = params[2] ?? chatId;
+                        const removed: boolean = await removeWhitelist(target);
+
+                        sock.sendMessage(chatId, { text: removed
+                            ? `🗑️ *Removed from whitelist*\n🆔 \`${target}\``
+                            : `❔ That chat was not whitelisted.\n🆔 \`${target}\`` });
                     }
-
-                    if (action === 'list' || action === 'l') {
+                    else if (action === 'list' || action === 'l')
+                    {
                         const rows = await listWhitelist();
-                        await sock.sendMessage(chatId, {
-                            text: rows.length
-                                ? `✅ *Whitelisted chats*\n${rows.map((r, i) =>
-                                    `${i + 1}. \`${r.jid}\``).join('\n')}`
-                                : '📭 No chats are whitelisted yet.'
-                        });
-                        break;
-                    }
 
-                    // Default: whitelist THIS chat
-                    const added = await addWhitelist(chatId, userId);
-                    await sock.sendMessage(chatId, {
-                        text: added
-                            ? `✅ *Auto-scan enabled for this chat.*\n🆔 \`${chatId}\`\n\n_QR codes sent here will now be scanned._`
-                            : `ℹ️ This chat is already whitelisted.\n🆔 \`${chatId}\``
-                    });
+                        sock.sendMessage(chatId, { text: rows.length > 0
+                            ? `✅ *Whitelisted Groups*\n${rows.map((r, i) => `${i + 1}. \`${r.jid}\``).join('\n')}`
+                            : '📭 No groups are whitelisted yet.' });
+                    }
+                    else
+                    {
+                        const added: boolean = await addWhitelist(chatId, userId);
+
+                        sock.sendMessage(chatId, { text: added
+                            ? `✅ *Auto-scan enabled for this chat!*\n🆔 \`${chatId}\`\n\n_QR codes sent here will now be scanned automatically._`
+                            : `ℹ️ This chat is already whitelisted.\n🆔 \`${chatId}\`` });
+                    }
+                    break;
+                }
+                case 'isolated':
+                case 'iso':
+                {
+                    switch (params.length)
+                    {
+                        case 1:
+                        case 2:
+                        {
+                            const docId: string | undefined = await resolveDocId(params[1]);
+
+                            if (docId === undefined)
+                            {
+                                sock.sendMessage(chatId, { text: `\`${params[1] ?? userId}\` not found!` });
+                                break;
+                            }
+
+                            await sock.sendMessage(chatId, { react: { text: "⏳", key: msg.key } });
+                            await sock.sendMessage(chatId, { text: '🔎 Comparing timetables across all registered students...' });
+
+                            const creds: Creds | undefined = await loadCreds(docId);
+                            const label: string = creds ? (creds.hidden ? '*'.repeat(creds.id.length) : creds.id) : docId;
+                            const result = await findIsolatedSessions(docId, label);
+
+                            if ('error' in result)
+                            {
+                                await sock.sendMessage(chatId, { text: `❌ ${result.error}` }, { quoted: msg });
+                                await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
+                                break;
+                            }
+
+                            await sock.sendMessage(chatId, { text: formatIsolated(result) }, { quoted: msg });
+                            await sock.sendMessage(chatId, { react: { text: "✅", key: msg.key } });
+                            break;
+                        }
+                        default:
+                        {
+                            sock.sendMessage(chatId, { text: '*Valid Formats*\n- !test <isolated | iso>\n- !test <isolated | iso> <Student ID | Doc ID>' });
+                        }
+                    }
+                    break;
+                }
+                case 'visualise':
+                case 'visualize':
+                case 'vis':
+                case 'v':
+                {
+                    switch (params.length)
+                    {
+                        case 1:
+                        case 2:
+                        {
+                            const docId: string | undefined = await resolveDocId(params[1]);
+
+                            if (docId === undefined)
+                            {
+                                sock.sendMessage(chatId, { text: `\`${params[1] ?? userId}\` not found!` });
+                                break;
+                            }
+
+                            await sock.sendMessage(chatId, { react: { text: "⏳", key: msg.key } });
+
+                            try
+                            {
+                                const slots = await slotsForDoc(docId);
+
+                                if (slots === null)
+                                {
+                                    await sock.sendMessage(chatId, { text: '❌ Could not load this student\'s attendance.' }, { quoted: msg });
+                                    await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
+                                    break;
+                                }
+                                if (slots.length === 0)
+                                {
+                                    await sock.sendMessage(chatId, { text: '📭 No attendance history yet — a timetable cannot be drawn.' }, { quoted: msg });
+                                    await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
+                                    break;
+                                }
+
+                                const creds: Creds | undefined = await loadCreds(docId);
+                                const label: string = creds ? (creds.hidden ? '*'.repeat(creds.id.length) : creds.id) : docId;
+                                const courses: number = new Set(slots.map(s => s.courseCode)).size;
+
+                                const png: Buffer = await renderTimetablePng(
+                                    slots,
+                                    `Timetable — ${label}`,
+                                    `${slots.length} sessions · ${courses} courses`
+                                );
+
+                                await sock.sendMessage(chatId, {
+                                    image: png,
+                                    caption: `🗓️ *Timetable — \`${label}\`*\n${slots.length} weekly sessions across ${courses} courses.`,
+                                    mimetype: 'image/png'
+                                }, { quoted: msg });
+                                await sock.sendMessage(chatId, { react: { text: "✅", key: msg.key } });
+                            }
+                            catch (err: any)
+                            {
+                                console.error('!test visualise error:', err);
+                                await sock.sendMessage(chatId, { text: `❌ Failed to render timetable: ${err?.message ?? err}` }, { quoted: msg });
+                                await sock.sendMessage(chatId, { react: { text: "❌", key: msg.key } });
+                            }
+                            break;
+                        }
+                        default:
+                        {
+                            sock.sendMessage(chatId, { text: '*Valid Formats*\n- !test <visualise | vis | v>\n- !test <visualise | vis | v> <Student ID | Doc ID>' });
+                        }
+                    }
                     break;
                 }
                 default:
@@ -527,6 +633,12 @@ function parseJid(msg: WAMessage): [string, string]
     {
         chatId = msg.key.remoteJid;
         userId = msg.key.participant;
+    }
+    else if (!msg.key.participant)
+    {
+        // Plain DM (@s.whatsapp.net) — treat the chat as the user
+        chatId = msg.key.remoteJid;
+        userId = msg.key.remoteJid;
     }
 
     return [chatId, userId];

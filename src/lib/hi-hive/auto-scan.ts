@@ -153,10 +153,12 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
       return false;
     }
 
-    // ── Whitelist gate ──────────────────────────────────────────────────────
-    // Only whitelisted chats may trigger auto-scan. Add one with `!test whitelist`.
-    if (!(await isWhitelisted(chatId))) {
-      console.log(`[autoScan] chat ${chatId} is not whitelisted — ignoring QR.`);
+    // ── Whitelist gate (GROUPS ONLY) ────────────────────────────────────────
+    // Private chats always scan. Groups must be whitelisted via `!test whitelist`,
+    // so a QR dropped in some random group is ignored.
+    const isGroup = chatId.endsWith("@g.us");
+    if (isGroup && !(await isWhitelisted(chatId))) {
+      console.log(`[autoScan] group ${chatId} is not whitelisted — ignoring QR.`);
       return false;   // fall through to normal message handling
     }
 
