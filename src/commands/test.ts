@@ -6,6 +6,7 @@ import { handleScanAttendance } from "./scan.js";
 import { getAttendance } from "../lib/hi-hive/get-attendance.js";
 import { formatAttendance } from "./attendance.js";
 import { decryptData, generateEncryptedData } from "../lib/hi-hive/scan-qr.js";
+import { addWhitelist, removeWhitelist, listWhitelist, isWhitelisted } from "../lib/hi-hive/scan-buffer-db.js";
 
 export interface Creds
 {
@@ -15,7 +16,7 @@ export interface Creds
     ownerId?: string;
 }
 
-const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt'] as const;
+const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl'] as const;
 type Subcommand = typeof SUBCOMMANDS[number];
 const ID_REGEX: RegExp = /^\d{7}$/;
 const ALLOWED_DOMAINS = ["1utar.my", "gmail.com"];
@@ -448,6 +449,42 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
                         }
                     }
                     break;
+                case 'whitelist':
+                case 'wl':
+                {
+                    const action = (params[1] ?? '').toLowerCase();
+
+                    if (action === 'remove' || action === 'rm') {
+                        const target = params[2] ?? chatId;
+                        const ok = await removeWhitelist(target);
+                        await sock.sendMessage(chatId, {
+                            text: ok
+                                ? `🗑️ Removed from whitelist:\n\`${target}\``
+                                : `❔ That chat was not whitelisted:\n\`${target}\``
+                        });
+                        break;
+                    }
+
+                    if (action === 'list' || action === 'l') {
+                        const rows = await listWhitelist();
+                        await sock.sendMessage(chatId, {
+                            text: rows.length
+                                ? `✅ *Whitelisted chats*\n${rows.map((r, i) =>
+                                    `${i + 1}. \`${r.jid}\``).join('\n')}`
+                                : '📭 No chats are whitelisted yet.'
+                        });
+                        break;
+                    }
+
+                    // Default: whitelist THIS chat
+                    const added = await addWhitelist(chatId, userId);
+                    await sock.sendMessage(chatId, {
+                        text: added
+                            ? `✅ *Auto-scan enabled for this chat.*\n🆔 \`${chatId}\`\n\n_QR codes sent here will now be scanned._`
+                            : `ℹ️ This chat is already whitelisted.\n🆔 \`${chatId}\``
+                    });
+                    break;
+                }
                 default:
                 {
                     sock.sendMessage(chatId, { text: 'Subcommand not found!' })
