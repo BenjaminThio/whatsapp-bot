@@ -83,12 +83,35 @@ export function startScanBufferService(sock: any) {
           if (remaining === 0) {
             const rows = await batchRows(job.batchId);
             const text = buildReport(rows);
-            const quoted = rows[0]?.quotedKey
-              ? { quoted: { key: rows[0].quotedKey, message: {} } as any }
-              : undefined;
-            await sock.sendMessage(job.chatId, { text }, quoted);
+
+            // Try to quote the original QR message; fall back to a plain send if
+            // Baileys rejects the reconstructed key (this used to throw and the
+            // report was silently lost).
+            let sent = false;
+            if (rows[0]?.quotedKey) {
+              try {
+                await sock.sendMessage(job.chatId, { text },
+                  { quoted: { key: rows[0].quotedKey, message: {} } as any });
+                sent = true;
+              } catch (quoteErr) {
+                console.log(`[scanBuffer] quoted send failed, sending plain:`, quoteErr);
+              }
+            }
+            if (!sent) await sock.sendMessage(job.chatId, { text });
+
+            // React on the original message so the chat shows a clear outcome
+            if (rows[0]?.quotedKey) {
+              const anyFail = rows.some(r => r.resultStatus !== "marked" && r.resultStatus !== "already_marked");
+              try {
+                await sock.sendMessage(job.chatId, {
+                  react: { text: anyFail ? "❌" : "✅", key: rows[0].quotedKey },
+                });
+              } catch { /* non-fatal */ }
+            }
+
             await deleteBatch(job.batchId);
-            console.log(`[scanBuffer] batch ${job.batchId} complete — report sent.`);
+            console.log(`[scanBuffer] ✅ batch ${job.batchId} complete — report sent (${rows.length} account(s)).`);
+            console.log(text.replace(/\*/g, ""));   // mirror the report into the terminal
           }
         } catch (err) {
           // Leave it pending so the next tick retries rather than losing the job
@@ -103,7 +126,15 @@ export function startScanBufferService(sock: any) {
   };
 
   // Immediate pass recovers anything that came due while the bot was offline
-  void tick();
+  void (async () => {
+    try {
+      const pending = await dueJobs(Date.now() + 365 * 24 * 3_600_000); // peek all
+      console.log(`🗓️ Scan buffer: ${pending.length} pending job(s) found on startup.`);
+    } catch (e) {
+      console.error("🗓️ Scan buffer: could not read scan_buffer table — did you run scan-buffer-schema.sql?", e);
+    }
+    await tick();
+  })();
   setInterval(tick, TICK_MS);
 
   // Hourly housekeeping
