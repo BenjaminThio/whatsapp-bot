@@ -29,7 +29,7 @@ import {
 import { scanOneAccount } from "./scan-runner.js";
 import { loadCreds } from "./creds.js";
 import { STATUS_META, type ReportStatus } from "./scan-status.js";
-import { includesStudent, includesStatus, type Destination } from "./report-targets.js";
+import { includesStudent, includesStatus, scannedByHeader, type Destination } from "./report-targets.js";
 
 const TICK_MS = Number(process.env["SCAN_BUFFER_TICK_MS"] ?? 500);
 
@@ -59,7 +59,8 @@ function buildReport(rows: BufferRow[]): string {
     })
     .join(" · ");
 
-  return `📋 *AUTO SCAN REPORT*\n${summary}\n\n${lines.join("\n")}\n\n🏁 *Completed at:* \`${now}\``;
+  const header = rows[0]?.scannedBy ? scannedByHeader(rows[0].scannedBy) : "";
+  return `${header}📋 *AUTO SCAN REPORT*\n${summary}\n\n${lines.join("\n")}\n\n🏁 *Completed at:* \`${now}\``;
 }
 
 export function startScanBufferService(sock: any) {
@@ -103,8 +104,14 @@ export function startScanBufferService(sock: any) {
 
             for (const dest of dests) {
               // 1. Which students does this destination care about?
-              const mine = rows.filter(r => includesStudent(dest, r.studentId));
-              if (mine.length === 0) continue;
+              let mine = rows.filter(r => includesStudent(dest, r.studentId));
+
+              // Same safety net as the delay notice: never leave the origin
+              // chat with no report because a filter matched nobody.
+              if (mine.length === 0) {
+                if (!dest.isOrigin) continue;
+                mine = rows;
+              }
 
               // 2. Status gate — only send if at least one included student
               //    finished with a status this destination asked for.
@@ -139,13 +146,23 @@ export function startScanBufferService(sock: any) {
               console.log(`[scanBuffer] report → ${dest.chatId} (${mine.length} student(s))`);
             }
 
-            // React on the original QR message so the sender sees an outcome
-            if (rows[0]?.quotedKey) {
-              const anyFail = rows.some(r =>
-                r.resultStatus !== "marked" && r.resultStatus !== "already_marked");
+            /*
+            Final reaction.
+
+            Two bugs fixed here:
+              • It used to go ❌ whenever ANY account wasn't marked. With several
+                accounts that's nearly always true (someone is not_enrolled, or
+                already_marked), so a perfectly good run ended on a cross.
+                A finished run now always ends on ✅ — the report carries the
+                per-student detail.
+              • It used to overwrite the ❤️ on silent (non-whitelisted) chats.
+                Those now keep their ❤️ and get no further reaction.
+            */
+            const silent = rows[0]?.originSilent ?? false;
+            if (!silent && rows[0]?.quotedKey) {
               try {
                 await sock.sendMessage(job.chatId, {
-                  react: { text: anyFail ? "❌" : "✅", key: rows[0].quotedKey },
+                  react: { text: "✅", key: rows[0].quotedKey },
                 });
               } catch { /* non-fatal */ }
             }

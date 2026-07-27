@@ -22,14 +22,24 @@ export interface ReportSetting {
   chatId:     string;
   filterIds?: string[];
   status:     "all" | ReportStatus | ReportStatus[];
+  /**
+   * Send the "queued / please wait" message to this chat?
+   *   true  (default) → send the delay message, then the report
+   *   false           → stay quiet until the final report
+   * Useful for chats that only want the outcome, not the countdown.
+   */
+  showDelay?: boolean;
 }
 
 export const reportSettings: ReportSetting[] = [
     { chatId: '120363426873108530@g.us', status: 'all' },
-    { chatId: '120363425521299083@g.us', filterIds: ['2504142', '2206851'], status: 'marked' }
+    { chatId: '120363425521299083@g.us', filterIds: ['2504142', '2206851'], status: 'all' }
   // ── Examples — replace with your real chat IDs ──────────────────────────
   // Only report 2504142 and 2000000, and only when someone was actually marked:
   // { chatId: "120363000000000000@g.us", filterIds: ["2504142", "2000000"], status: "marked" },
+  //
+  // Report only, no countdown message:
+  // { chatId: "120363222222222222@g.us", status: "all", showDelay: false },
   //
   // Full report of everyone, whatever the outcome:
   // { chatId: "120363111111111111@g.us", status: "all" },

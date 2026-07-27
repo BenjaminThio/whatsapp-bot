@@ -12,8 +12,8 @@ import { validateAccount, buildScheduleSlots, matchesSchedule, isAlreadyRecorded
 import { canonicalCode } from "./course-aliases.js";
 import { ReportStatus, STATUS_META, fromScanStatus, formatStatusLine } from "./scan-status.js";
 import { formatWaitingNotice, randomDelaySec } from "./scan-buffer.js";
-import { enqueueBatch, newId as newBufferId } from "./scan-buffer-db.js";
-import { resolveDestinations, includesStudent } from "./report-targets.js";
+import { enqueueBatch, newId as newBufferId, incrementContribution } from "./scan-buffer-db.js";
+import { resolveDestinations, includesStudent, resolveScannedBy, scannedByHeader } from "./report-targets.js";
 import { decodeQr } from "../old-hi-hive/decode-qr.js";
 
 const VALID_QR_TYPES = ["Q01", "Q02", "E01", "LQR", "CTR"];
@@ -159,6 +159,14 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     // this chat hears back about it — see resolveDestinations().
     const { destinations, originSilent } = await resolveDestinations(sock, msg, chatId);
 
+    // Who supplied this QR? Used for the header and the contribution ranking.
+    const scannedBy = await resolveScannedBy(sock, msg, chatId);
+    if (scannedBy.docId) {
+      try { await incrementContribution(scannedBy.docId); }
+      catch (e) { console.error("[autoScan] contribution credit failed:", e); }
+    }
+    console.log(`[autoScan] scanned by ${scannedBy.label} (${scannedBy.docId ?? "unregistered"})`);
+
     // Non-whitelisted group with no reportSettings rule: scan silently and just
     // thank the sender with a ❤️ instead of the usual ⏳/✅ flow.
     await sock.sendMessage(chatId, {
@@ -192,6 +200,8 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
           chatId,
           quotedKey:    msg.key,
           destinations,
+          originSilent,
+          scannedBy:    scannedBy.label,
           dueAt:        startedAt + Math.round(delaySec * 1000),
           delaySec,
         };
@@ -204,13 +214,26 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     // The status gate can't apply yet (nothing has been scanned), so a
     // destination hears the queue notice if any of its students are in it.
     for (const dest of destinations) {
-      const mine = jobs.filter(j => includesStudent(dest, j.studentId));
-      if (mine.length === 0) continue;
+      if (!dest.showDelay) {
+        console.log(`[autoScan] ${dest.chatId}: showDelay=false — skipping queue notice.`);
+        continue;
+      }
+
+      let mine = jobs.filter(j => includesStudent(dest, j.studentId));
+
+      // Safety net: a filter that matches nobody would leave the ORIGIN chat
+      // silent, which looks like the bot ignored the QR. Fall back to showing
+      // everyone there. Configured (non-origin) chats stay strictly filtered.
+      if (mine.length === 0) {
+        if (!dest.isOrigin) continue;
+        console.log(`[autoScan] ${dest.chatId}: filter matched nobody — showing all (origin chat).`);
+        mine = jobs;
+      }
 
       try {
         await sock.sendMessage(
           dest.chatId,
-          { text: formatWaitingNotice(mine) },
+          { text: scannedByHeader(scannedBy.label) + formatWaitingNotice(mine) },
           dest.isOrigin ? { quoted: msg } : undefined
         );
       } catch (err) {

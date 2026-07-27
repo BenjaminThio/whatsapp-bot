@@ -5,7 +5,7 @@ import { handleScanAttendance } from "./scan.js";
 import { getAttendance } from "../lib/hi-hive/get-attendance.js";
 import { formatAttendance } from "./attendance.js";
 import { decryptData, generateEncryptedData } from "../lib/hi-hive/scan-qr.js";
-import { addWhitelist, removeWhitelist, listWhitelist } from "../lib/hi-hive/scan-buffer-db.js";
+import { addWhitelist, removeWhitelist, listWhitelist, getRankings } from "../lib/hi-hive/scan-buffer-db.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../lib/hi-hive/timetable.js";
 import { renderTimetablePng } from "../lib/hi-hive/visualise.js";
 
@@ -17,7 +17,7 @@ export interface Creds
     ownerId?: string;
 }
 
-const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v'] as const;
+const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v', 'rank', 'ranks', 'leaderboard', 'lb'] as const;
 type Subcommand = typeof SUBCOMMANDS[number];
 const ID_REGEX: RegExp = /^\d{7}$/;
 const EMAIL_REGEX: RegExp = /^[a-zA-Z0-9._%+-]+@1utar\.my$/i;
@@ -400,7 +400,8 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
                         '- !test <whitelist | wl> list',
                         '- !test <whitelist | wl> remove [Group JID]',
                         '- !test <isolated | iso> [Student ID | Doc ID]',
-                        '- !test <visualise | vis | v> [Student ID | Doc ID]'
+                        '- !test <visualise | vis | v> [Student ID | Doc ID]',
+                        '- !test <rank | leaderboard | lb>'
                     ];
 
                     sock.sendMessage(chatId, { text: `*All Valid Formats*\n${allSubcommandFormats.join('\n')}` });
@@ -589,6 +590,37 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string): Promis
                             sock.sendMessage(chatId, { text: '*Valid Formats*\n- !test <visualise | vis | v>\n- !test <visualise | vis | v> <Student ID | Doc ID>' });
                         }
                     }
+                    break;
+                }
+                case 'rank':
+                case 'ranks':
+                case 'leaderboard':
+                case 'lb':
+                {
+                    const rows = await getRankings(25);
+
+                    if (rows.length === 0)
+                    {
+                        sock.sendMessage(chatId, { text: '📭 No QR contributions recorded yet.' });
+                        break;
+                    }
+
+                    const medal = (i: number): string =>
+                        i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`;
+
+                    const total: number = rows.reduce((sum, r) => sum + r.contributions, 0);
+
+                    const lines: string[] = rows.map((r, i) => {
+                        const name: string = r.hidden ? 'Hidden User' : r.studentId;
+                        const share: string = ((r.contributions / total) * 100).toFixed(0);
+                        return `${medal(i)} \`${name}\` — *${r.contributions}* QR${r.contributions === 1 ? '' : 's'} _(${share}%)_`;
+                    });
+
+                    sock.sendMessage(chatId, { text:
+                        `🏆 *QR CONTRIBUTION RANKING*\n_Who supplies the QR codes everyone scans._\n\n` +
+                        `${lines.join('\n')}\n\n` +
+                        `📊 ${total} QR${total === 1 ? '' : 's'} contributed by ${rows.length} student${rows.length === 1 ? '' : 's'}.`
+                    });
                     break;
                 }
                 default:

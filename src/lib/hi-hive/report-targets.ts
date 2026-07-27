@@ -28,6 +28,7 @@ export interface Destination {
   filterIds?: string[];              // undefined = every student
   status:     "all" | ReportStatus[]; // normalised to an array (or 'all')
   isOrigin:   boolean;               // is this the chat the QR came from?
+  showDelay:  boolean;               // send the "queued" message to this chat?
 }
 
 /** Normalise a setting's `status` field into 'all' | ReportStatus[]. */
@@ -95,6 +96,7 @@ export async function resolveDestinations(
       filterIds: setting.filterIds,
       status:    normaliseStatus(setting.status),
       isOrigin:  setting.chatId === chatId,
+      showDelay: setting.showDelay ?? true,   // default: show the countdown
     });
   }
 
@@ -105,11 +107,11 @@ export async function resolveDestinations(
     if (!isGroup) {
       // Private chat — scope the report to the two people in the conversation
       const filterIds = await privateChatFilterIds(sock, msg, chatId);
-      destinations.push({ chatId, filterIds, status: "all", isOrigin: true });
+      destinations.push({ chatId, filterIds, status: "all", isOrigin: true, showDelay: true });
       console.log(`[reportTargets] PM ${chatId} → filterIds=${filterIds ? filterIds.join(",") : "ALL"}`);
     } else if (await isWhitelisted(chatId)) {
       // Whitelisted group — full report
-      destinations.push({ chatId, filterIds: undefined, status: "all", isOrigin: true });
+      destinations.push({ chatId, filterIds: undefined, status: "all", isOrigin: true, showDelay: true });
       console.log(`[reportTargets] whitelisted group ${chatId} → full report`);
     } else {
       // Non-whitelisted group — scan silently, thank the sender with ❤️
@@ -131,4 +133,49 @@ export function includesStudent(dest: Destination, studentId: string): boolean {
 export function includesStatus(dest: Destination, status: ReportStatus): boolean {
   if (dest.status === "all") return true;
   return dest.status.includes(status);
+}
+
+
+/**
+ * Work out who supplied this QR, for the "Scanned by" header and the
+ * contribution ranking.
+ *
+ * Returns the display label (masked to "Hidden User" when their creds are
+ * hidden) and the doc id to credit, when the sender's jid maps to a stored
+ * account.
+ */
+export async function resolveScannedBy(
+  sock: WASocket,
+  msg: WAMessage,
+  chatId: string
+): Promise<{ label: string; docId: string | null }> {
+  const isGroup = chatId.endsWith("@g.us");
+  const ownId   = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
+  const ownLid  = (sock.user as any)?.lid ? jidNormalizedUser((sock.user as any).lid) : null;
+
+  // Sender jid: the participant in a group, otherwise whichever side sent it
+  const senderJid = isGroup
+    ? (msg.key.participant ?? null)
+    : (msg.key.fromMe ? (ownId ?? ownLid) : chatId);
+
+  for (const jid of [senderJid, ownLid, ownId]) {
+    if (!jid) continue;
+    try {
+      const creds = await loadCreds(jid);
+      if (creds) {
+        return {
+          label: creds.hidden ? "Hidden User" : creds.id,
+          docId: jid,
+        };
+      }
+    } catch { /* keep trying */ }
+    if (jid === senderJid) break;   // only fall back for the bot's own ids
+  }
+
+  return { label: "Unknown User", docId: null };
+}
+
+/** Header line shown above the delay message and the report. */
+export function scannedByHeader(label: string): string {
+  return `📤 *Scanned by:* \`${label}\`\n`;
 }

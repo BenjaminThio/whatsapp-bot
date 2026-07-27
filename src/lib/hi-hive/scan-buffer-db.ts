@@ -19,6 +19,8 @@ export interface BufferRow {
   chatId:       string;
   quotedKey:    any | null;
   destinations: any[] | null;    // resolved report destinations for this batch
+  originSilent: boolean;         // true = origin chat gets ❤️ only, no messages
+  scannedBy:    string;          // display label of whoever supplied the QR
   dueAt:        number;
   status:       "pending" | "done";
   resultStatus: string | null;
@@ -31,6 +33,8 @@ const map = (r: any): BufferRow => ({
   studentId: r.student_id ?? r.label, label: r.label,
   rawQr: r.raw_qr, chatId: r.chat_id, quotedKey: r.quoted_key ?? null,
   destinations: r.destinations ?? null,
+  originSilent: r.origin_silent ?? false,
+  scannedBy: r.scanned_by ?? "Unknown User",
   dueAt: Number(r.due_at), status: r.status,
   resultStatus: r.result_status ?? null,
 });
@@ -42,11 +46,12 @@ export async function enqueueBatch(rows: Omit<BufferRow, "status" | "resultStatu
       await tx`
         INSERT INTO scan_buffer
           (id, batch_id, doc_id, student_id, label, raw_qr, chat_id,
-           quoted_key, destinations, due_at, status)
+           quoted_key, destinations, origin_silent, scanned_by, due_at, status)
         VALUES
           (${r.id}, ${r.batchId}, ${r.docId}, ${r.studentId}, ${r.label}, ${r.rawQr},
            ${r.chatId}, ${r.quotedKey ? sql.json(r.quotedKey) : null},
            ${r.destinations ? sql.json(r.destinations as any) : null},
+           ${r.originSilent ?? false}, ${r.scannedBy ?? "Unknown User"},
            ${r.dueAt}, 'pending')
       `;
     }
@@ -127,4 +132,36 @@ export async function removeWhitelist(jid: string): Promise<boolean> {
 export async function listWhitelist(): Promise<{ jid: string; addedBy: string | null }[]> {
   const rows = await sql`SELECT jid, added_by FROM whitelisted_groups ORDER BY added_at`;
   return rows.map((r: any) => ({ jid: r.jid, addedBy: r.added_by ?? null }));
+}
+
+
+// ─── QR contribution ranking ──────────────────────────────────────────────────
+
+/** Credit one QR contribution to the account behind `docId`. */
+export async function incrementContribution(docId: string): Promise<void> {
+  await sql`
+    UPDATE hi_hive SET contributions = contributions + 1 WHERE doc_id = ${docId}
+  `;
+}
+
+export interface RankRow {
+  studentId:     string;
+  hidden:        boolean;
+  contributions: number;
+}
+
+/** Leaderboard, highest contributor first. */
+export async function getRankings(limit = 25): Promise<RankRow[]> {
+  const rows = await sql`
+    SELECT student_id, hidden, contributions
+    FROM hi_hive
+    WHERE contributions > 0
+    ORDER BY contributions DESC, student_id ASC
+    LIMIT ${limit}
+  `;
+  return rows.map((r: any) => ({
+    studentId:     r.student_id,
+    hidden:        r.hidden,
+    contributions: Number(r.contributions),
+  }));
 }
