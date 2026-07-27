@@ -13,10 +13,12 @@ export interface BufferRow {
   id:           string;
   batchId:      string;
   docId:        string;
+  studentId:    string;          // real id — labels may be masked for hidden creds
   label:        string;
   rawQr:        string;
   chatId:       string;
   quotedKey:    any | null;
+  destinations: any[] | null;    // resolved report destinations for this batch
   dueAt:        number;
   status:       "pending" | "done";
   resultStatus: string | null;
@@ -25,8 +27,10 @@ export interface BufferRow {
 export const newId = () => crypto.randomBytes(12).toString("base64url");
 
 const map = (r: any): BufferRow => ({
-  id: r.id, batchId: r.batch_id, docId: r.doc_id, label: r.label,
+  id: r.id, batchId: r.batch_id, docId: r.doc_id,
+  studentId: r.student_id ?? r.label, label: r.label,
   rawQr: r.raw_qr, chatId: r.chat_id, quotedKey: r.quoted_key ?? null,
+  destinations: r.destinations ?? null,
   dueAt: Number(r.due_at), status: r.status,
   resultStatus: r.result_status ?? null,
 });
@@ -37,10 +41,13 @@ export async function enqueueBatch(rows: Omit<BufferRow, "status" | "resultStatu
     for (const r of rows) {
       await tx`
         INSERT INTO scan_buffer
-          (id, batch_id, doc_id, label, raw_qr, chat_id, quoted_key, due_at, status)
+          (id, batch_id, doc_id, student_id, label, raw_qr, chat_id,
+           quoted_key, destinations, due_at, status)
         VALUES
-          (${r.id}, ${r.batchId}, ${r.docId}, ${r.label}, ${r.rawQr},
-           ${r.chatId}, ${r.quotedKey ? sql.json(r.quotedKey) : null}, ${r.dueAt}, 'pending')
+          (${r.id}, ${r.batchId}, ${r.docId}, ${r.studentId}, ${r.label}, ${r.rawQr},
+           ${r.chatId}, ${r.quotedKey ? sql.json(r.quotedKey) : null},
+           ${r.destinations ? sql.json(r.destinations as any) : null},
+           ${r.dueAt}, 'pending')
       `;
     }
   });

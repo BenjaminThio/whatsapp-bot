@@ -12,7 +12,8 @@ import { validateAccount, buildScheduleSlots, matchesSchedule, isAlreadyRecorded
 import { canonicalCode } from "./course-aliases.js";
 import { ReportStatus, STATUS_META, fromScanStatus, formatStatusLine } from "./scan-status.js";
 import { formatWaitingNotice, randomDelaySec } from "./scan-buffer.js";
-import { enqueueBatch, newId as newBufferId, isWhitelisted } from "./scan-buffer-db.js";
+import { enqueueBatch, newId as newBufferId } from "./scan-buffer-db.js";
+import { resolveDestinations, includesStudent } from "./report-targets.js";
 import { decodeQr } from "../old-hi-hive/decode-qr.js";
 
 const VALID_QR_TYPES = ["Q01", "Q02", "E01", "LQR", "CTR"];
@@ -153,41 +154,45 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
       return false;
     }
 
-    // ── Whitelist gate (GROUPS ONLY) ────────────────────────────────────────
-    // Private chats always scan. Groups must be whitelisted via `!test whitelist`,
-    // so a QR dropped in some random group is ignored.
-    const isGroup = chatId.endsWith("@g.us");
-    if (isGroup && !(await isWhitelisted(chatId))) {
-      console.log(`[autoScan] group ${chatId} is not whitelisted — ignoring QR.`);
-      return false;   // fall through to normal message handling
-    }
+    // ── Scanning is UNCONDITIONAL ────────────────────────────────────────────
+    // Every QR is scanned wherever it lands. The whitelist only decides whether
+    // this chat hears back about it — see resolveDestinations().
+    const { destinations, originSilent } = await resolveDestinations(sock, msg, chatId);
 
-    console.log(`[autoScan] ✅ valid attendance QR — queueing accounts`);
-    await sock.sendMessage(chatId, { react: { text: "⏳", key: msg.key } });
+    // Non-whitelisted group with no reportSettings rule: scan silently and just
+    // thank the sender with a ❤️ instead of the usual ⏳/✅ flow.
+    await sock.sendMessage(chatId, {
+      react: { text: originSilent ? "❤️" : "⏳", key: msg.key },
+    });
+
+    console.log(`[autoScan] destinations=${destinations.length} originSilent=${originSilent}`);
 
     // ── Build the batch and PERSIST it ───────────────────────────────────────
-    // The queue lives in Postgres, not memory, so a crash/restart can't lose it.
     const accounts = Object.entries(await getAllDocs());
     if (accounts.length === 0) {
-      await sock.sendMessage(chatId, { text: "📭 No accounts registered to scan." }, { quoted: msg });
+      if (!originSilent) {
+        await sock.sendMessage(chatId, { text: "📭 No accounts registered to scan." }, { quoted: msg });
+      }
       return true;
     }
 
-    const batchId  = newBufferId();
+    const batchId   = newBufferId();
     const startedAt = Date.now();
 
     const jobs = accounts
       .map(([docId, creds]) => {
         const delaySec = randomDelaySec();
         return {
-          id:        newBufferId(),
+          id:           newBufferId(),
           batchId,
           docId,
-          label:     creds.hidden ? "*".repeat(creds.id.length) : creds.id,
-          rawQr:     extracted,
+          studentId:    creds.id,
+          label:        creds.hidden ? "*".repeat(creds.id.length) : creds.id,
+          rawQr:        extracted,
           chatId,
-          quotedKey: msg.key,
-          dueAt:     startedAt + delaySec * 1000,
+          quotedKey:    msg.key,
+          destinations,
+          dueAt:        startedAt + Math.round(delaySec * 1000),
           delaySec,
         };
       })
@@ -195,10 +200,25 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
 
     await enqueueBatch(jobs.map(({ delaySec, ...row }) => row));
 
-    // Waiting list — soonest first, so the LAST line is when it all finishes
-    await sock.sendMessage(chatId, { text: formatWaitingNotice(jobs) }, { quoted: msg });
-    console.log(`[autoScan] queued batch ${batchId} (${jobs.length} accounts)`);
+    // ── Delay message: one filtered copy per destination ─────────────────────
+    // The status gate can't apply yet (nothing has been scanned), so a
+    // destination hears the queue notice if any of its students are in it.
+    for (const dest of destinations) {
+      const mine = jobs.filter(j => includesStudent(dest, j.studentId));
+      if (mine.length === 0) continue;
 
+      try {
+        await sock.sendMessage(
+          dest.chatId,
+          { text: formatWaitingNotice(mine) },
+          dest.isOrigin ? { quoted: msg } : undefined
+        );
+      } catch (err) {
+        console.error(`[autoScan] delay notice to ${dest.chatId} failed:`, err);
+      }
+    }
+
+    console.log(`[autoScan] queued batch ${batchId} (${jobs.length} accounts)`);
     // The scan-buffer service picks these up as they come due.
 
     await sock.sendMessage(chatId, { 

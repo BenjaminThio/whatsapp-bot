@@ -29,6 +29,7 @@ import {
 import { scanOneAccount } from "./scan-runner.js";
 import { loadCreds } from "./creds.js";
 import { STATUS_META, type ReportStatus } from "./scan-status.js";
+import { includesStudent, includesStatus, type Destination } from "./report-targets.js";
 
 const TICK_MS = Number(process.env["SCAN_BUFFER_TICK_MS"] ?? 500);
 
@@ -93,26 +94,55 @@ export function startScanBufferService(sock: any) {
           const remaining = await batchPendingCount(job.batchId);
           if (remaining === 0) {
             const rows = await batchRows(job.batchId);
-            const text = buildReport(rows);
 
-            // Try to quote the original QR message; fall back to a plain send if
-            // Baileys rejects the reconstructed key (this used to throw and the
-            // report was silently lost).
-            let sent = false;
-            if (rows[0]?.quotedKey) {
-              try {
-                await sock.sendMessage(job.chatId, { text },
-                  { quoted: { key: rows[0].quotedKey, message: {} } as any });
-                sent = true;
-              } catch (quoteErr) {
-                console.log(`[scanBuffer] quoted send failed, sending plain:`, quoteErr);
+            // Destinations were resolved and stored when the batch was queued.
+            // Fall back to a single report in the origin chat if absent.
+            const dests: Destination[] = (rows[0]?.destinations as Destination[] | null) ?? [
+              { chatId: job.chatId, status: "all", isOrigin: true },
+            ];
+
+            for (const dest of dests) {
+              // 1. Which students does this destination care about?
+              const mine = rows.filter(r => includesStudent(dest, r.studentId));
+              if (mine.length === 0) continue;
+
+              // 2. Status gate — only send if at least one included student
+              //    finished with a status this destination asked for.
+              const passes = mine.some(r =>
+                includesStatus(dest, (r.resultStatus ?? "scan_failed") as ReportStatus));
+              if (!passes) {
+                console.log(`[scanBuffer] ${dest.chatId}: status gate not met — not sending.`);
+                continue;
               }
-            }
-            if (!sent) await sock.sendMessage(job.chatId, { text });
 
-            // React on the original message so the chat shows a clear outcome
+              const text = buildReport(mine);
+
+              let sent = false;
+              if (dest.isOrigin && rows[0]?.quotedKey) {
+                try {
+                  await sock.sendMessage(dest.chatId, { text },
+                    { quoted: { key: rows[0].quotedKey, message: {} } as any });
+                  sent = true;
+                } catch (quoteErr) {
+                  console.log(`[scanBuffer] quoted send failed, sending plain:`, quoteErr);
+                }
+              }
+              if (!sent) {
+                try {
+                  await sock.sendMessage(dest.chatId, { text });
+                } catch (err) {
+                  console.error(`[scanBuffer] report to ${dest.chatId} failed:`, err);
+                  continue;
+                }
+              }
+
+              console.log(`[scanBuffer] report → ${dest.chatId} (${mine.length} student(s))`);
+            }
+
+            // React on the original QR message so the sender sees an outcome
             if (rows[0]?.quotedKey) {
-              const anyFail = rows.some(r => r.resultStatus !== "marked" && r.resultStatus !== "already_marked");
+              const anyFail = rows.some(r =>
+                r.resultStatus !== "marked" && r.resultStatus !== "already_marked");
               try {
                 await sock.sendMessage(job.chatId, {
                   react: { text: anyFail ? "❌" : "✅", key: rows[0].quotedKey },
@@ -121,8 +151,8 @@ export function startScanBufferService(sock: any) {
             }
 
             await deleteBatch(job.batchId);
-            console.log(`[scanBuffer] ✅ batch ${job.batchId} complete — report sent (${rows.length} account(s)).`);
-            console.log(text.replace(/\*/g, ""));   // mirror the report into the terminal
+            console.log(`[scanBuffer] ✅ batch ${job.batchId} complete (${rows.length} account(s)).`);
+            console.log(buildReport(rows).replace(/\*/g, ""));   // full run mirrored to terminal
           }
         } catch (err) {
           // Leave it pending so the next tick retries rather than losing the job
