@@ -183,7 +183,18 @@ export function startScanBufferService(sock: any) {
               • It used to overwrite the ❤️ on silent (non-whitelisted) chats.
                 Those now keep their ❤️ and get no further reaction.
             */
-            const silent = rows[0]?.originSilent ?? false;
+            /*
+            Decide silence from the DESTINATIONS, not just the stored flag.
+
+            `origin_silent` is a newer column — rows inserted before the ALTER
+            read back as false, which let the ✅ overwrite the ❤️ on
+            non-whitelisted groups. Cross-check it against whether the origin
+            chat is actually a destination: if it isn't, the chat was meant to
+            stay silent and must keep its ❤️.
+            */
+            const originIsDestination = dests.some(d => d.chatId === job.chatId);
+            const silent = (rows[0]?.originSilent ?? false) || !originIsDestination;
+
             if (!silent && rows[0]?.quotedKey) {
               try {
                 await sock.sendMessage(job.chatId, {

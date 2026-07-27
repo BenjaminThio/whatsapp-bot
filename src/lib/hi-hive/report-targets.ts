@@ -20,7 +20,7 @@
 import { jidNormalizedUser, type WAMessage, type WASocket } from "@whiskeysockets/baileys";
 import { reportSettings, type ReportSetting } from "../../config/report-settings.js";
 import { isWhitelisted } from "./scan-buffer-db.js";
-import { loadCreds } from "./creds.js";
+import { loadCreds, getAllDocs } from "./creds.js";
 import type { ReportStatus } from "./scan-status.js";
 
 export interface Destination {
@@ -57,6 +57,13 @@ async function privateChatFilterIds(
   msg: WAMessage,
   chatId: string
 ): Promise<string[] | undefined> {
+  // Escape hatch: set PM_FILTER_PARTICIPANTS=0 to disable the two-person
+  // scoping entirely and always show every student in private chats.
+  if (process.env["PM_FILTER_PARTICIPANTS"] === "0") {
+    console.log(`[reportTargets] PM scoping disabled by env → showing all`);
+    return undefined;
+  }
+
   const ownId  = sock.user?.id  ? jidNormalizedUser(sock.user.id) : null;
   const ownLid = (sock.user as any)?.lid ? jidNormalizedUser((sock.user as any).lid) : null;
 
@@ -65,14 +72,35 @@ async function privateChatFilterIds(
   const receiver = msg.key.fromMe ? chatId : (ownId ?? ownLid);
 
   const ids = new Set<string>();
-  for (const jid of [sender, receiver, ownLid, chatId]) {
+  for (const jid of [sender, receiver, ownLid, ownId, chatId]) {
     const sid = await studentIdForJid(jid ?? undefined);
     if (sid) ids.add(sid);
   }
+  console.log(`[reportTargets] PM participants resolved to: ${[...ids].join(",") || "(none)"}`);
 
-  // No registered student on either side → don't over-filter into an empty
-  // report; fall back to showing everyone.
-  return ids.size > 0 ? [...ids] : undefined;
+  if (ids.size === 0) {
+    console.log(`[reportTargets] no participant mapped to a student → showing all`);
+    return undefined;
+  }
+
+  /*
+  CRITICAL: a filter listing students that aren't actually registered would
+  match zero queued jobs and silently drop the whole PM report. Verify the
+  derived ids against the real account list and only keep the ones that exist.
+  If none survive, show everyone instead of going silent.
+  */
+  const registered = new Set(
+    Object.values(await getAllDocs()).map((c: any) => String(c.id))
+  );
+  const usable = [...ids].filter(id => registered.has(id));
+
+  if (usable.length === 0) {
+    console.log(`[reportTargets] none of [${[...ids].join(",")}] are registered accounts → showing all`);
+    return undefined;
+  }
+
+  console.log(`[reportTargets] PM filter = ${usable.join(",")}`);
+  return usable;
 }
 
 /**
@@ -119,6 +147,17 @@ export async function resolveDestinations(
         `${destinations.length} configured destination(s) still notified`);
       return { destinations, originSilent: true };
     }
+  }
+
+  /*
+  Hard guarantee: unless this chat is a deliberately-silent non-whitelisted
+  group, the ORIGIN must always be among the destinations. If any branch above
+  failed to add it, add it now with no filter — the person who sent the QR
+  always deserves to see what happened.
+  */
+  if (!destinations.some(d => d.chatId === chatId)) {
+    console.log(`[reportTargets] origin ${chatId} was missing — adding it unfiltered.`);
+    destinations.push({ chatId, filterIds: undefined, status: "all", isOrigin: true, showDelay: true });
   }
 
   // Dedupe by chatId — if a configured entry and the origin are the same chat,

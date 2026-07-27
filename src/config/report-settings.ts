@@ -32,8 +32,10 @@ export interface ReportSetting {
 }
 
 export const reportSettings: ReportSetting[] = [
-    { chatId: '120363426873108530@g.us', status: 'all' },
-    { chatId: '120363425521299083@g.us', filterIds: ['2504142', '2206851'], status: 'all' }
+  { chatId: '120363407753637765@g.us', status: 'all' }
+  // { chatId: '120363426873108530@g.us', status: 'all' },
+  // { chatId: '120363425521299083@g.us', filterIds: ['2504142', '2206851'], status: 'all' }
+
   // ── Examples — replace with your real chat IDs ──────────────────────────
   // Only report 2504142 and 2000000, and only when someone was actually marked:
   // { chatId: "120363000000000000@g.us", filterIds: ["2504142", "2000000"], status: "marked" },
