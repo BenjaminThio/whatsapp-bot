@@ -1,5 +1,23 @@
+/**
+ * scan-buffer.ts — src/lib/hi-hive/scan-buffer.ts
+ *
+ * Spreads auto-scans over a random window instead of firing them all at once,
+ * so the submissions don't look robotic/simultaneous.
+ *
+ * Design (as requested): we do NOT sleep the whole process. Each student is put
+ * in a buffer with its own "due at" timestamp. A tick loop repeatedly checks the
+ * clock and runs whichever jobs have come due, until the buffer is empty. Every
+ * wait is an `await` on a timer, which yields to the event loop — the bot keeps
+ * handling other messages the entire time.
+ *
+ * Env:
+ *   AUTOSCAN_MIN_DELAY_SEC  (default 0)
+ *   AUTOSCAN_MAX_DELAY_SEC  (default 60)
+ *   AUTOSCAN_TICK_MS        (default 1000)
+ */
+
 export const MIN_DELAY_SEC = Number(process.env["AUTOSCAN_MIN_DELAY_SEC"] ?? 0);
-export const MAX_DELAY_SEC = Number(process.env["AUTOSCAN_MAX_DELAY_SEC"] ?? 5);
+export const MAX_DELAY_SEC = Number(process.env["AUTOSCAN_MAX_DELAY_SEC"] ?? 60);
 const TICK_MS              = Number(process.env["AUTOSCAN_TICK_MS"] ?? 1000);
 
 export interface BufferJob<T> {
@@ -13,11 +31,18 @@ export interface BufferJob<T> {
   delaySec: number;
 }
 
-/** Random integer seconds in [MIN_DELAY_SEC, MAX_DELAY_SEC]. */
+/**
+ * Random FRACTIONAL seconds in [MIN_DELAY_SEC, MAX_DELAY_SEC], e.g. 1.53, 2.34,
+ * 4.71. Whole-second values collide often with a small range and few students
+ * (two people both rolling "3" out of 0–5), and tied jobs end up running
+ * back-to-back in the same instant. Fractions make ties effectively impossible.
+ * Rounded to 2 decimals — finer than that is pointless at this timescale.
+ */
 export function randomDelaySec(): number {
   const lo = Math.max(0, Math.min(MIN_DELAY_SEC, MAX_DELAY_SEC));
   const hi = Math.max(lo, MAX_DELAY_SEC);
-  return lo + Math.floor(Math.random() * (hi - lo + 1));
+  const raw = lo + Math.random() * (hi - lo);
+  return Math.round(raw * 100) / 100;
 }
 
 /**
@@ -36,12 +61,16 @@ export function buildBuffer<T>(
     .sort((a, b) => a.dueAt - b.dueAt);
 }
 
-/** Format "1m 05s" / "42s" for the waiting list. */
+/** Format "1m 05.4s" / "42.7s" for the waiting list (handles fractions). */
 export function humanWait(sec: number): string {
-  if (sec < 60) return `${sec}s`;
+  if (sec < 60) {
+    // One decimal is enough to read; drop it when it's a whole second
+    return Number.isInteger(sec) ? `${sec}s` : `${sec.toFixed(1)}s`;
+  }
   const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}m ${String(s).padStart(2, "0")}s`;
+  const s = sec - m * 60;
+  const sStr = Number.isInteger(s) ? String(s).padStart(2, "0") : s.toFixed(1).padStart(4, "0");
+  return `${m}m ${sStr}s`;
 }
 
 /** "14:30:05" */

@@ -8,7 +8,18 @@
  *
  *   startScanBufferService(sock);
  *
- * Env: SCAN_BUFFER_TICK_MS (default 2000)
+ * Jobs ALWAYS run one at a time in due-time order (the loop below is a plain
+ * sequential `for` + `await` — never parallel). What changes with the tick
+ * interval is only PRECISION: this service only checks "what's due" once per
+ * tick, so two jobs whose due times fall inside the same tick window will run
+ * back-to-back in that instant instead of visibly spaced apart.
+ *
+ * Rule of thumb: keep SCAN_BUFFER_TICK_MS well under your smallest expected
+ * delay gap. Defaults to 500ms, which comfortably resolves delays down to a
+ * couple of seconds apart. If you configure AUTOSCAN_MIN/MAX_DELAY_SEC very
+ * small (e.g. a 5s max for testing), drop this to 100–200ms.
+ *
+ * Env: SCAN_BUFFER_TICK_MS (default 500)
  */
 
 import {
@@ -19,7 +30,7 @@ import { scanOneAccount } from "./scan-runner.js";
 import { loadCreds } from "./creds.js";
 import { STATUS_META, type ReportStatus } from "./scan-status.js";
 
-const TICK_MS = Number(process.env["SCAN_BUFFER_TICK_MS"] ?? 2000);
+const TICK_MS = Number(process.env["SCAN_BUFFER_TICK_MS"] ?? 500);
 
 let started = false;                 // guard: reconnects must not stack pollers
 const inFlight = new Set<string>();  // jobs currently being processed
