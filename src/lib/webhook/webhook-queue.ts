@@ -1,32 +1,34 @@
 /**
- * Vercel writes raw GitHub events to the `webhook_queue` collection. This
- * service polls that queue (same pattern as startScheduleService), formats each
- * event, sends it to the target WhatsApp chat, then DELETES the job so the queue
- * stays clean.
+ * webhook-queue.ts — src/lib/webhook/webhook-queue.ts
  *
- * Call once from index.ts on connection "open":
- *   startWebhookQueue(sock);
+ * EVENT-DRIVEN replacement for the old 30-second polling loop.
+ *
+ * Why the old version hit `resource_exhausted`:
+ *   • It ran `.get()` every 30s = 2,880 queries/day. Firestore bills a MINIMUM
+ *     of 1 read per query even when zero documents match, so an idle queue still
+ *     burned ~2,880 reads/day.
+ *   • Worse, startWebhookQueue() was called on every connection "open" event.
+ *     Each reconnect started ANOTHER setInterval that was never cleared, so the
+ *     pollers stacked. ~20 reconnects/day × 2,880 = 57,600 reads → over the
+ *     50,000/day free tier.
+ *
+ * The fix:
+ *   1. onSnapshot() real-time listener instead of polling. Firestore charges
+ *      1 read per DOCUMENT DELIVERED, not per poll — an idle queue costs ~0
+ *      reads/day instead of thousands.
+ *   2. A hard idempotency guard so reconnects can never stack listeners, plus
+ *      detach-on-restart.
+ *   3. Jobs are still deleted after sending, so the collection stays tiny and
+ *      the initial snapshot is cheap.
  */
 
 import db from "../../firebase.js";
 import { formatEvent } from "./format-event.js";
 
 const COLLECTION = "webhook_queue";
-const POLL_INTERVAL_MS = 30_000;
-// Safety: ignore jobs older than this (e.g. stuck/corrupt) - delete without sending
 const MAX_JOB_AGE_MS = 24 * 3_600_000;
 
-interface QueueJob {
-  token:     string;
-  targetJid: string;
-  events?:   string[];
-  event:     string;
-  payload:   any;
-  processed: boolean;
-  createdAt: any;   // Firestore Timestamp
-}
-
-// Track jobs we're mid-processing so overlapping polls don't double-send
+let unsubscribe: null | (() => void) = null;   // active listener, if any
 const inFlight = new Set<string>();
 
 function wantsEvent(events: string[] | undefined, event: string): boolean {
@@ -34,74 +36,80 @@ function wantsEvent(events: string[] | undefined, event: string): boolean {
   return events.includes(event);
 }
 
-export function startWebhookQueue(sock: any) {
-  console.log("🪝 Webhook queue consumer started.");
+async function processDoc(sock: any, doc: any) {
+  if (inFlight.has(doc.id)) return;
+  inFlight.add(doc.id);
 
-  const poll = async () => {
-    try {
-      // Oldest unprocessed jobs first
-      const snap = await db.collection(COLLECTION)
-        .where("processed", "==", false)
-        .limit(20)
-        .get();
-
-      if (snap.empty) return;
-
-      for (const doc of snap.docs) {
-        if (inFlight.has(doc.id)) continue;
-        inFlight.add(doc.id);
-
-        const job = doc.data() as QueueJob;
-
-        try {
-          // Drop jobs that are too old (stuck/corrupt) without sending
-          const createdMs = job.createdAt?.toMillis?.() ?? Date.now();
-          if (Date.now() - createdMs > MAX_JOB_AGE_MS) {
-            await doc.ref.delete();
-            console.log(`🪝 Dropped stale job ${doc.id}`);
-            continue;
-          }
-
-          // ping => friendly "connected" message
-          if (job.event === "ping") {
-            await sock.sendMessage(job.targetJid, {
-              text: "✅ *GitHub webhook connected!*\nThis chat will now receive repo events.",
-            });
-            await doc.ref.delete();
-            console.log(`🪝 ping => ${job.targetJid}, job deleted`);
-            continue;
-          }
-
-          // Event filter (re-checked bot-side in case config changed)
-          if (!wantsEvent(job.events, job.event)) {
-            await doc.ref.delete(); // not wanted - drop quietly
-            continue;
-          }
-
-          // Format and send
-          const formatted = formatEvent(job.event, job.payload);
-          if (!formatted) {
-            // Sub-action not worth notifying (e.g. PR labeled) - drop
-            await doc.ref.delete();
-            continue;
-          }
-
-          await sock.sendMessage(job.targetJid, { text: formatted.text });
-          await doc.ref.delete(); // clean up after successful send
-          console.log(`🪝 ${job.event} => ${job.targetJid} (${formatted.repoName ?? "?"}), job deleted`);
-
-        } catch (err) {
-          // On failure, DON'T delete - leave it for the next poll to retry.
-          console.error(`🪝 Failed to process job ${doc.id}:`, err);
-        } finally {
-          inFlight.delete(doc.id);
-        }
-      }
-    } catch (err) {
-      console.error("🪝 Webhook queue poll error:", err);
+  const job = doc.data() as any;
+  try {
+    const createdMs = job.createdAt?.toMillis?.() ?? Date.now();
+    if (Date.now() - createdMs > MAX_JOB_AGE_MS) {
+      await doc.ref.delete();
+      console.log(`🪝 dropped stale job ${doc.id}`);
+      return;
     }
-  };
 
-  void poll(); // immediate first pass
-  setInterval(poll, POLL_INTERVAL_MS);
+    if (job.event === "ping") {
+      await sock.sendMessage(job.targetJid, {
+        text: "✅ *GitHub webhook connected!*\nThis chat will now receive repo events.",
+      });
+      await doc.ref.delete();
+      return;
+    }
+
+    if (!wantsEvent(job.events, job.event)) {
+      await doc.ref.delete();
+      return;
+    }
+
+    const formatted = formatEvent(job.event, job.payload);
+    if (!formatted) { await doc.ref.delete(); return; }
+
+    await sock.sendMessage(job.targetJid, { text: formatted.text });
+    await doc.ref.delete();
+    console.log(`🪝 ${job.event} → ${job.targetJid} (${formatted.repoName ?? "?"})`);
+  } catch (err) {
+    // Don't delete — the listener will redeliver on the next change, or the
+    // document stays for a manual retry. No busy-looping either way.
+    console.error(`🪝 failed to process ${doc.id}:`, err);
+  } finally {
+    inFlight.delete(doc.id);
+  }
+}
+
+/**
+ * Start the real-time listener. Safe to call on every reconnect: any previous
+ * listener is detached first, so they can never stack.
+ */
+export function startWebhookQueue(sock: any) {
+  if (unsubscribe) {
+    // Reconnect: drop the old listener before attaching a new one.
+    try { unsubscribe(); } catch { /* ignore */ }
+    unsubscribe = null;
+    console.log("🪝 previous webhook listener detached.");
+  }
+
+  unsubscribe = db.collection(COLLECTION)
+    .where("processed", "==", false)
+    .onSnapshot(
+      (snap: any) => {
+        // Only newly ADDED docs cost a read; steady state is free.
+        for (const change of snap.docChanges()) {
+          if (change.type === "added") void processDoc(sock, change.doc);
+        }
+      },
+      (err: any) => {
+        console.error("🪝 webhook listener error:", err);
+        unsubscribe = null;
+        // Reconnect with backoff rather than hammering Firestore.
+        setTimeout(() => startWebhookQueue(sock), 60_000);
+      }
+    );
+
+  console.log("🪝 Webhook queue listener started (event-driven, no polling).");
+}
+
+/** Detach explicitly (e.g. on shutdown). */
+export function stopWebhookQueue() {
+  if (unsubscribe) { try { unsubscribe(); } catch {} unsubscribe = null; }
 }
