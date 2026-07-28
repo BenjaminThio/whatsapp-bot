@@ -41,13 +41,9 @@ const clock = (d: Date) => d.toLocaleTimeString("en-US", { hour12: false });
 
 function buildReport(rows: BufferRow[]): string {
   const now = clock(new Date());
+  const header = rows[0]?.scannedBy ? scannedByHeader(rows[0].scannedBy) : "";
 
-  const lines = rows.map(r => {
-    const status = (r.resultStatus ?? "scan_failed") as ReportStatus;
-    const m = STATUS_META[status] ?? STATUS_META.scan_failed;
-    return `${m.emoji} *[${now}]* \`${r.label}\` ➔ *${m.label}*\n     _${m.sentence}_`;
-  });
-
+  // Tally across every course in the batch
   const tally = new Map<string, number>();
   for (const r of rows) {
     const s = r.resultStatus ?? "scan_failed";
@@ -60,9 +56,39 @@ function buildReport(rows: BufferRow[]): string {
     })
     .join(" · ");
 
-  const header = rows[0]?.scannedBy ? scannedByHeader(rows[0].scannedBy) : "";
-  const course = rows[0]?.courseCode ? ` FOR ${rows[0].courseCode.toUpperCase()}` : "";
-  return `${header}📋 *AUTO SCAN REPORT${course}*\n${summary}\n\n${lines.join("\n")}\n\n🏁 *Completed at:* \`${now}\``;
+  const line = (r: BufferRow, indent: string) => {
+    const status = (r.resultStatus ?? "scan_failed") as ReportStatus;
+    const m = STATUS_META[status] ?? STATUS_META.scan_failed;
+    return `${indent}${m.emoji} \`${r.label}\` ➔ *${m.label}*\n${indent}     _${m.sentence}_`;
+  };
+
+  const courses = [...new Set(rows.map(r => r.courseCode ?? "Unknown"))];
+
+  // Single course → the familiar flat layout, course named in the title
+  if (courses.length <= 1) {
+    const course = rows[0]?.courseCode ? ` FOR ${rows[0].courseCode.toUpperCase()}` : "";
+    const lines = rows.map(r => line(r, ""));
+    return `${header}📋 *AUTO SCAN REPORT${course}*\n${summary}\n\n${lines.join("\n")}\n\n🏁 *Completed at:* \`${now}\``;
+  }
+
+  // Several courses in one image → a block per course, each with its own tally
+  const blocks = courses.map(course => {
+    const mine = rows.filter(r => (r.courseCode ?? "Unknown") === course);
+    const sub = new Map<string, number>();
+    for (const r of mine) {
+      const s = r.resultStatus ?? "scan_failed";
+      sub.set(s, (sub.get(s) ?? 0) + 1);
+    }
+    const subSummary = [...sub.entries()]
+      .map(([s, n]) => {
+        const m = STATUS_META[s as ReportStatus] ?? STATUS_META.scan_failed;
+        return `${m.emoji} ${n}`;
+      })
+      .join(" · ");
+    return `📚 *${course.toUpperCase()}*  _${subSummary}_\n${mine.map(r => line(r, "   ")).join("\n")}`;
+  });
+
+  return `${header}📋 *AUTO SCAN REPORT*\n_${courses.length} courses_ · ${summary}\n\n${blocks.join("\n\n")}\n\n🏁 *Completed at:* \`${now}\``;
 }
 
 export function startScanBufferService(sock: any) {

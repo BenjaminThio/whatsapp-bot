@@ -6,7 +6,7 @@ import { WAMessage, WASocket, downloadContentFromMessage } from "@whiskeysockets
 import { readBarcodes } from "zxing-wasm/full";
 import { ensureZXingReady } from "./zxing-init.js";
 import { getAllDocs } from "./creds.js";
-import { formatWaitingNotice, randomDelaySec } from "./scan-buffer.js";
+import { formatWaitingNoticeGrouped, randomDelaySec } from "./scan-buffer.js";
 import { enqueueBatch, newId as newBufferId, incrementContribution } from "./scan-buffer-db.js";
 import { resolveDestinations, includesStudent, resolveScannedBy, scannedByHeader } from "./report-targets.js";
 import { decodeQr } from "../old-hi-hive/decode-qr.js";
@@ -107,38 +107,73 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     for await (const chunk of stream) buf = Buffer.concat([buf, chunk]);
     console.log(`[autoScan] downloaded ${buf.length} bytes`);
 
-    // ── Read QR with zxing ──────────────────────────────────────────────────
+    // ── Read QR with zxing (multi-pass, reads ALL symbols) ─────────────────
     console.log(`[autoScan] running zxing...`);
     ensureZXingReady();   // load local wasm (no CDN fetch) — safe to call repeatedly
-    let extracted: string | null = null;
-    try {
-      const results = await readBarcodes(buf, {
-        tryHarder: true,
-        formats: ["QRCode"],
-        maxNumberOfSymbols: 1,
-      });
-      extracted = results.length > 0 ? results[0].text : null;
-    } catch (zxingErr) {
-      console.log(`[autoScan] zxing error: ${zxingErr}`);
+
+    /*
+    Photos of a projector/laptop screen are hard: glare, angle, moiré, and often
+    MORE THAN ONE QR in frame. The old single pass used maxNumberOfSymbols:1,
+    which stops at the first symbol found — so a second QR beside it could win,
+    or a marginal image could come back empty.
+
+    Now: read up to 10 symbols, and escalate through progressively more
+    aggressive decode settings until something is found.
+    */
+    const PASSES: { name: string; opts: any }[] = [
+      { name: "fast",     opts: { tryHarder: true, formats: ["QRCode"], maxNumberOfSymbols: 10 } },
+      { name: "rotate",   opts: { tryHarder: true, tryRotate: true, tryInvert: true, formats: ["QRCode"], maxNumberOfSymbols: 10 } },
+      { name: "downscale",opts: { tryHarder: true, tryRotate: true, tryInvert: true, tryDownscale: true, formats: ["QRCode"], maxNumberOfSymbols: 10 } },
+      { name: "any-format", opts: { tryHarder: true, tryRotate: true, tryInvert: true, tryDownscale: true, maxNumberOfSymbols: 10 } },
+    ];
+
+    let allTexts: string[] = [];
+    for (const pass of PASSES) {
+      try {
+        const results = await readBarcodes(buf, pass.opts);
+        if (results.length > 0) {
+          allTexts = results.map((r: any) => r.text).filter(Boolean);
+          console.log(`[autoScan] zxing pass "${pass.name}" found ${allTexts.length} symbol(s)`);
+          break;
+        }
+        console.log(`[autoScan] zxing pass "${pass.name}" found nothing — escalating`);
+      } catch (zxingErr) {
+        console.log(`[autoScan] zxing pass "${pass.name}" error: ${zxingErr}`);
+      }
+    }
+
+    if (allTexts.length === 0) {
+      console.log(`[autoScan] no QR found in image after ${PASSES.length} passes (${buf.length} bytes)`);
       return false;
     }
 
-    if (!extracted) {
-      console.log(`[autoScan] no QR found in image`);
+    // Prefer an attendance-format QR; a photo may also contain unrelated codes.
+    const attendanceQrs = allTexts.filter(isAttendanceQr);
+    if (attendanceQrs.length === 0) {
+      console.log(`[autoScan] ${allTexts.length} QR(s) found but none are attendance QRs: ` +
+        allTexts.map(t => t.split(QR_SEPARATOR)[0]).join(", "));
       return false;
     }
-    console.log(`[autoScan] QR extracted: ${extracted.slice(0, 80)}`);
-
-    // ── Check attendance QR format ──────────────────────────────────────────
-    if (!isAttendanceQr(extracted)) {
-      console.log(`[autoScan] not an attendance QR (type=${extracted.split(QR_SEPARATOR)[0]}) — ignoring`);
-      return false;
+    // Distinct QRs only — the same code can be detected twice in one frame.
+    const distinctQrs = [...new Set(attendanceQrs)];
+    if (distinctQrs.length > 1) {
+      console.log(`[autoScan] 📚 ${distinctQrs.length} attendance QRs in this image — all will be scanned.`);
     }
+    distinctQrs.forEach((q, i) => console.log(`[autoScan] QR[${i}]: ${q.slice(0, 60)}`));
 
-    // ── Decode the QR once (course code for the header, and future checks) ──
-    const decoded = decodeQr(userId, extracted);
-    const qrInfo  = decoded.ok ? decoded.decoded.info : undefined;
-    console.log(`[autoScan] course=${qrInfo?.courseCode ?? "?"} datetime=${qrInfo?.datetime ?? "?"}`);
+    // ── Decode every QR (course code per QR, used for headers and grouping) ─
+    const qrEntries = distinctQrs.map(raw => {
+      const d = decodeQr(userId, raw);
+      const info = d.ok ? d.decoded.info : undefined;
+      return {
+        raw,
+        courseCode: info?.courseCode ?? null,
+        datetime:   info?.datetime   ?? null,
+      };
+    });
+    for (const q of qrEntries) {
+      console.log(`[autoScan] QR course=${q.courseCode ?? "?"} datetime=${q.datetime ?? "?"}`);
+    }
 
     // ── Duplicate delivery guard ────────────────────────────────────────────
     if (alreadyHandled(msg.key.id)) {
@@ -179,27 +214,39 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     const batchId   = newBufferId();
     const startedAt = Date.now();
 
+    /*
+    One message = ONE batch, containing a job for every (account × QR) pair.
+
+    Keeping it in a single batch is what makes multi-QR safe: the completion
+    check and the atomic report claim already work per-batch, so several courses
+    produce exactly one delay notice and one report — never the duplicate
+    batches that previously came from processing an image twice.
+    */
     const jobs = accounts
-      .map(([docId, creds]) => {
-        const delaySec = randomDelaySec();
-        return {
-          id:           newBufferId(),
-          batchId,
-          docId,
-          studentId:    creds.id,
-          label:        creds.hidden ? "*".repeat(creds.id.length) : creds.id,
-          rawQr:        extracted,
-          chatId,
-          quotedKey:    msg.key,
-          destinations,
-          originSilent,
-          scannedBy:    scannedBy.label,
-          courseCode:   qrInfo?.courseCode ?? null,
-          dueAt:        startedAt + Math.round(delaySec * 1000),
-          delaySec,
-        };
-      })
+      .flatMap(([docId, creds]) =>
+        qrEntries.map(q => {
+          const delaySec = randomDelaySec();
+          return {
+            id:           newBufferId(),
+            batchId,
+            docId,
+            studentId:    creds.id,
+            label:        creds.hidden ? "*".repeat(creds.id.length) : creds.id,
+            rawQr:        q.raw,
+            chatId,
+            quotedKey:    msg.key,
+            destinations,
+            originSilent,
+            scannedBy:    scannedBy.label,
+            courseCode:   q.courseCode,
+            dueAt:        startedAt + Math.round(delaySec * 1000),
+            delaySec,
+          };
+        })
+      )
       .sort((a, b) => a.dueAt - b.dueAt);
+
+    console.log(`[autoScan] ${accounts.length} account(s) × ${qrEntries.length} QR(s) = ${jobs.length} job(s)`);
 
     await enqueueBatch(jobs.map(({ delaySec, ...row }) => row));
 
@@ -226,9 +273,7 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
       try {
         await sock.sendMessage(
           dest.chatId,
-          { text: scannedByHeader(scannedBy.label)
-                 + (qrInfo?.courseCode ? `📚 *Course:* ${qrInfo.courseCode.toUpperCase()}\n` : "")
-                 + formatWaitingNotice(mine) },
+          { text: scannedByHeader(scannedBy.label) + formatWaitingNoticeGrouped(mine) },
           dest.isOrigin ? { quoted: msg } : undefined
         );
       } catch (err) {

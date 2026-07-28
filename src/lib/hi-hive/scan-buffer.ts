@@ -17,7 +17,7 @@
  */
 
 export const MIN_DELAY_SEC = Number(process.env["AUTOSCAN_MIN_DELAY_SEC"] ?? 0);
-export const MAX_DELAY_SEC = Number(process.env["AUTOSCAN_MAX_DELAY_SEC"] ?? 5);
+export const MAX_DELAY_SEC = Number(process.env["AUTOSCAN_MAX_DELAY_SEC"] ?? 60);
 const TICK_MS              = Number(process.env["AUTOSCAN_TICK_MS"] ?? 1000);
 
 export interface BufferJob<T> {
@@ -138,4 +138,51 @@ export async function runBuffer<T>(
     const waitMs = Math.min(TICK_MS, Math.max(0, pending[0].dueAt - Date.now()));
     await new Promise(resolve => setTimeout(resolve, waitMs));
   }
+}
+
+
+/**
+ * Waiting list grouped by course — for images containing several QRs.
+ *
+ * Students are listed soonest-first within each course, and the overall finish
+ * time is taken from the very last job across all courses.
+ */
+export function formatWaitingNoticeGrouped(
+  jobs: { label: string; delaySec: number; dueAt: number; courseCode: string | null }[]
+): string {
+  if (jobs.length === 0) return "";
+
+  const sorted = [...jobs].sort((a, b) => a.dueAt - b.dueAt);
+  const courses = [...new Set(sorted.map(j => j.courseCode ?? "Unknown"))];
+
+  // Single course → keep the original flat layout
+  if (courses.length === 1) {
+    const lines = sorted.map(j =>
+      `⏳ \`${j.label}\` ➔ in *${humanWait(j.delaySec)}*  _(at ${clock(new Date(j.dueAt))})_`);
+    const last = sorted[sorted.length - 1];
+    return (
+      `🕒 *AUTO SCAN QUEUED*\n` +
+      `_Scans are spread out to avoid firing all at once._\n\n` +
+      `${lines.join("\n")}\n\n` +
+      `🏁 *Expected to finish at:* \`${clock(new Date(last.dueAt))}\`  ` +
+      `_(longest wait: ${humanWait(last.delaySec)})_`
+    );
+  }
+
+  // Several courses → one block each
+  const blocks = courses.map(course => {
+    const mine = sorted.filter(j => (j.courseCode ?? "Unknown") === course);
+    const lines = mine.map(j =>
+      `   ⏳ \`${j.label}\` ➔ in *${humanWait(j.delaySec)}*  _(at ${clock(new Date(j.dueAt))})_`);
+    return `📚 *${course.toUpperCase()}*\n${lines.join("\n")}`;
+  });
+
+  const last = sorted[sorted.length - 1];
+  return (
+    `🕒 *AUTO SCAN QUEUED*\n` +
+    `_${courses.length} courses detected in this image._\n\n` +
+    `${blocks.join("\n\n")}\n\n` +
+    `🏁 *Expected to finish at:* \`${clock(new Date(last.dueAt))}\`  ` +
+    `_(longest wait: ${humanWait(last.delaySec)})_`
+  );
 }
