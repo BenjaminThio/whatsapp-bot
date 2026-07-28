@@ -17,7 +17,7 @@
  */
 
 export const MIN_DELAY_SEC = Number(process.env["AUTOSCAN_MIN_DELAY_SEC"] ?? 0);
-export const MAX_DELAY_SEC = Number(process.env["AUTOSCAN_MAX_DELAY_SEC"] ?? 60);
+export const MAX_DELAY_SEC = Number(process.env["AUTOSCAN_MAX_DELAY_SEC"] ?? 5);
 const TICK_MS              = Number(process.env["AUTOSCAN_TICK_MS"] ?? 1000);
 
 export interface BufferJob<T> {
