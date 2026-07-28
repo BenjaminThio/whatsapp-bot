@@ -21,6 +21,7 @@ export interface BufferRow {
   destinations: any[] | null;    // resolved report destinations for this batch
   originSilent: boolean;         // true = origin chat gets ❤️ only, no messages
   scannedBy:    string;          // display label of whoever supplied the QR
+  courseCode:   string | null;   // course on the QR, for the report header
   dueAt:        number;
   status:       "pending" | "done";
   resultStatus: string | null;
@@ -35,24 +36,25 @@ const map = (r: any): BufferRow => ({
   destinations: r.destinations ?? null,
   originSilent: r.origin_silent ?? false,
   scannedBy: r.scanned_by ?? "Unknown User",
+  courseCode: r.course_code ?? null,
   dueAt: Number(r.due_at), status: r.status,
   resultStatus: r.result_status ?? null,
 });
 
 /** Insert a whole batch of jobs in one transaction. */
 export async function enqueueBatch(rows: Omit<BufferRow, "status" | "resultStatus">[]): Promise<void> {
-  await sql.begin(async (tx) => {
+  await sql.begin(async (tx: any) => {
     for (const r of rows) {
       await tx`
         INSERT INTO scan_buffer
           (id, batch_id, doc_id, student_id, label, raw_qr, chat_id,
-           quoted_key, destinations, origin_silent, scanned_by, due_at, status)
+           quoted_key, destinations, origin_silent, scanned_by, course_code, due_at, status)
         VALUES
           (${r.id}, ${r.batchId}, ${r.docId}, ${r.studentId}, ${r.label}, ${r.rawQr},
            ${r.chatId}, ${r.quotedKey ? sql.json(r.quotedKey) : null},
            ${r.destinations ? sql.json(r.destinations as any) : null},
            ${r.originSilent ?? false}, ${r.scannedBy ?? "Unknown User"},
-           ${r.dueAt}, 'pending')
+           ${r.courseCode ?? null}, ${r.dueAt}, 'pending')
       `;
     }
   });

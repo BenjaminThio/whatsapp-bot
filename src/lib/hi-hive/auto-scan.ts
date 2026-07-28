@@ -5,12 +5,7 @@
 import { WAMessage, WASocket, downloadContentFromMessage } from "@whiskeysockets/baileys";
 import { readBarcodes } from "zxing-wasm/full";
 import { ensureZXingReady } from "./zxing-init.js";
-import { scanQr } from "./scan-qr.js";
-import type { ScanQrResult } from "./types.js";
 import { getAllDocs } from "./creds.js";
-import { validateAccount, buildScheduleSlots, matchesSchedule, isAlreadyRecorded } from "./account-validation.js";
-import { canonicalCode } from "./course-aliases.js";
-import { ReportStatus, STATUS_META, fromScanStatus, formatStatusLine } from "./scan-status.js";
 import { formatWaitingNotice, randomDelaySec } from "./scan-buffer.js";
 import { enqueueBatch, newId as newBufferId, incrementContribution } from "./scan-buffer-db.js";
 import { resolveDestinations, includesStudent, resolveScannedBy, scannedByHeader } from "./report-targets.js";
@@ -19,18 +14,33 @@ import { decodeQr } from "../old-hi-hive/decode-qr.js";
 const VALID_QR_TYPES = ["Q01", "Q02", "E01", "LQR", "CTR"];
 const QR_SEPARATOR   = ":*:";
 
-// ── Feature 3: smart-schedule skip ────────────────────────────────────────────
-// When ON, an account's scan is skipped if the QR's course/day/time/group has
-// never appeared in that account's historical attendance (i.e. not their class).
-// OFF by default — flip with SMART_SCHEDULE_SKIP=1 once you trust it.
-const SMART_SCHEDULE_SKIP = process.env["SMART_SCHEDULE_SKIP"] === "1";
+/*
+Baileys can deliver the SAME message more than once — index.ts accepts both
+"notify" and "append", and retries/re-syncs can replay it. Without this guard
+one QR image produced TWO batches: two delay messages with different random
+delays, and two sets of jobs racing over the same accounts.
 
-const EXPIRY_EMOJI: Record<string, string> = {
-  in_window: "✅",
-  too_early: "⏳",
-  expired:   "⚠️",
-  unknown:   "❓",
-};
+Keyed on the message id, capped so it can't grow without bound. A genuinely
+re-sent image gets a new message id, so real repeat scans still work.
+*/
+const handledMessages = new Set<string>();
+const HANDLED_CAP = 500;
+
+function alreadyHandled(id: string | null | undefined): boolean {
+  if (!id) return false;
+  if (handledMessages.has(id)) return true;
+  handledMessages.add(id);
+  if (handledMessages.size > HANDLED_CAP) {
+    // Drop the oldest entries (insertion-ordered Set)
+    const excess = handledMessages.size - HANDLED_CAP;
+    let i = 0;
+    for (const k of handledMessages) {
+      handledMessages.delete(k);
+      if (++i >= excess) break;
+    }
+  }
+  return false;
+}
 
 function isAttendanceQr(raw: string): boolean {
   const sep = raw.indexOf(QR_SEPARATOR);
@@ -48,35 +58,6 @@ function resolveIds(msg: WAMessage): { chatId: string; userId: string } | null {
     return { chatId: jid, userId: jid };
   }
   return null;
-}
-
-function formatResult(result: ScanQrResult): string {
-  const lines: string[] = [];
-  if (result.expiry) {
-    const icon = EXPIRY_EMOJI[result.expiry.verdict] ?? "❓";
-    lines.push(`${icon} *Pre-check:* ${result.expiry.reason}`);
-  }
-  lines.push("");
-  if (result.ok) {
-    lines.push(`✅ *${result.message}*`);
-    if (result.courseCode) lines.push(`📚 *Course:* ${result.courseCode}`);
-  } else {
-    switch (result.status) {
-      case "rejected":
-        lines.push(`❌ *Not Marked*\n📋 ${result.message}`); break;
-      case "token_expired":
-        lines.push(`🔐 *Session Expired*\n${result.message}`); break;
-      case "scanner_page":
-        lines.push(`⏱️ *QR Window Missed*\n${result.message}`); break;
-      case "auth_error":
-        lines.push(`🔐 *Auth Error*\n${result.message}`); break;
-      case "network_error":
-        lines.push(`🌐 *Network Error*\n${result.message}`); break;
-      default:
-        lines.push(`⚠️ *${result.status}*\n${result.message}`);
-    }
-  }
-  return lines.join("\n");
 }
 
 export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boolean> {
@@ -154,6 +135,17 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
       return false;
     }
 
+    // ── Decode the QR once (course code for the header, and future checks) ──
+    const decoded = decodeQr(userId, extracted);
+    const qrInfo  = decoded.ok ? decoded.decoded.info : undefined;
+    console.log(`[autoScan] course=${qrInfo?.courseCode ?? "?"} datetime=${qrInfo?.datetime ?? "?"}`);
+
+    // ── Duplicate delivery guard ────────────────────────────────────────────
+    if (alreadyHandled(msg.key.id)) {
+      console.log(`[autoScan] message ${msg.key.id} already handled — ignoring duplicate delivery.`);
+      return true;
+    }
+
     // ── Scanning is UNCONDITIONAL ────────────────────────────────────────────
     // Every QR is scanned wherever it lands. The whitelist only decides whether
     // this chat hears back about it — see resolveDestinations().
@@ -176,7 +168,7 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
     console.log(`[autoScan] destinations=${destinations.length} originSilent=${originSilent}`);
 
     // ── Build the batch and PERSIST it ───────────────────────────────────────
-    const accounts = Object.entries(await getAllDocs());
+    const accounts = Object.entries(await getAllDocs()) as [string, { id: string; hidden: boolean }][];
     if (accounts.length === 0) {
       if (!originSilent) {
         await sock.sendMessage(chatId, { text: "📭 No accounts registered to scan." }, { quoted: msg });
@@ -202,6 +194,7 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
           destinations,
           originSilent,
           scannedBy:    scannedBy.label,
+          courseCode:   qrInfo?.courseCode ?? null,
           dueAt:        startedAt + Math.round(delaySec * 1000),
           delaySec,
         };
@@ -233,7 +226,9 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
       try {
         await sock.sendMessage(
           dest.chatId,
-          { text: scannedByHeader(scannedBy.label) + formatWaitingNotice(mine) },
+          { text: scannedByHeader(scannedBy.label)
+                 + (qrInfo?.courseCode ? `📚 *Course:* ${qrInfo.courseCode.toUpperCase()}\n` : "")
+                 + formatWaitingNotice(mine) },
           dest.isOrigin ? { quoted: msg } : undefined
         );
       } catch (err) {

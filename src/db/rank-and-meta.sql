@@ -9,3 +9,6 @@ CREATE INDEX IF NOT EXISTS idx_hihive_contrib ON hi_hive (contributions DESC);
 -- One-time report claim: guarantees exactly one report per batch even if two
 -- workers finish the last jobs at the same moment.
 ALTER TABLE scan_buffer ADD COLUMN IF NOT EXISTS reported BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- Course code of the scanned QR, shown in the report header.
+ALTER TABLE scan_buffer ADD COLUMN IF NOT EXISTS course_code TEXT;

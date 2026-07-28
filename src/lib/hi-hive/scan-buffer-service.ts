@@ -61,7 +61,8 @@ function buildReport(rows: BufferRow[]): string {
     .join(" · ");
 
   const header = rows[0]?.scannedBy ? scannedByHeader(rows[0].scannedBy) : "";
-  return `${header}📋 *AUTO SCAN REPORT*\n${summary}\n\n${lines.join("\n")}\n\n🏁 *Completed at:* \`${now}\``;
+  const course = rows[0]?.courseCode ? ` FOR ${rows[0].courseCode.toUpperCase()}` : "";
+  return `${header}📋 *AUTO SCAN REPORT${course}*\n${summary}\n\n${lines.join("\n")}\n\n🏁 *Completed at:* \`${now}\``;
 }
 
 export function startScanBufferService(sock: any) {
@@ -117,10 +118,11 @@ export function startScanBufferService(sock: any) {
             // Destinations were resolved and stored when the batch was queued.
             // Fall back to a single report in the origin chat if absent.
             const dests: Destination[] = (rows[0]?.destinations as Destination[] | null) ?? [
-              { chatId: job.chatId, status: "all", isOrigin: true },
+              { chatId: job.chatId, status: "all", isOrigin: true, showDelay: true },
             ];
 
             console.log(`[scanBuffer] batch ${job.batchId}: ${dests.length} destination(s) to report to.`);
+            let delivered = 0;
 
             for (const dest of dests) {
              try {
@@ -164,6 +166,7 @@ export function startScanBufferService(sock: any) {
                 }
               }
 
+              delivered++;
               console.log(`[scanBuffer] ✉️ report → ${dest.chatId} (${mine.length} student(s))`);
              } catch (destErr) {
                // One bad destination must not stop the others from being told.
@@ -203,8 +206,14 @@ export function startScanBufferService(sock: any) {
               } catch { /* non-fatal */ }
             }
 
+            if (delivered === 0) {
+              // Nothing got through. Keep it loud so the result isn't lost silently.
+              console.error(`[scanBuffer] ⚠️ batch ${job.batchId}: NO destination accepted the report.`);
+              console.error(buildReport(rows).replace(/\*/g, ""));
+            }
+
             await deleteBatch(job.batchId);
-            console.log(`[scanBuffer] ✅ batch ${job.batchId} complete (${rows.length} account(s)).`);
+            console.log(`[scanBuffer] ✅ batch ${job.batchId} complete (${rows.length} account(s), ${delivered} report(s) sent).`);
             console.log(buildReport(rows).replace(/\*/g, ""));   // full run mirrored to terminal
           }
         } catch (err) {
