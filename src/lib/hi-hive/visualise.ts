@@ -33,11 +33,27 @@ const PAD_B   = 52;
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** Trim a label to fit `maxPx`, adding an ellipsis when cut. */
-function fit(text: string, maxPx: number, charPx: number): string {
-  const max = Math.floor(maxPx / charPx);
-  if (max <= 0) return "";
-  return text.length <= max ? text : text.slice(0, Math.max(1, max - 1)) + "…";
+/**
+ * Pick the largest font size (down to `minSize`) at which `text` fits inside
+ * `maxPx`. Used instead of truncating labels — a block always shows its full
+ * text, just smaller when the box is narrow, rather than "UECS2…".
+ *
+ * `charFactor` is an average glyph-width-to-font-size ratio for this
+ * sans-serif font (empirically ~0.55–0.63 depending on the character mix).
+ */
+function fitFontSize(
+  text: string,
+  maxPx: number,
+  maxSize: number,
+  minSize: number,
+  charFactor: number
+): number {
+  if (!text) return maxSize;
+  let size = maxSize;
+  while (size > minSize && text.length * size * charFactor > maxPx) {
+    size -= 0.5;
+  }
+  return Math.max(size, minSize);
 }
 
 function buildSvg(slots: Slot[], title: string, subtitle: string): string {
@@ -63,6 +79,12 @@ function buildSvg(slots: Slot[], title: string, subtitle: string): string {
 
   const codes = [...new Set(slots.map(s => s.courseCode))].sort();
   const colourOf = (c: string) => PALETTE[codes.indexOf(c) % PALETTE.length];
+
+  // Smallest legible size we'll ever draw the course code at. Used to work
+  // out how wide a block needs to be so the code never has to be truncated.
+  const CODE_MAX_SIZE = 11.5;
+  const CODE_MIN_SIZE = 7.5;
+  const CODE_CHAR_FACTOR = 0.62;
 
   const p: string[] = [];
   p.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}">`);
@@ -98,23 +120,37 @@ function buildSvg(slots: Slot[], title: string, subtitle: string): string {
 
     const x = PAD_L + ((s.startMin - hourFrom * 60) / 60) * COL_W + 2;
     const y = PAD_T + r * ROW_H + 4;
-    const w = Math.max(26, (s.durationMin / 60) * COL_W - 4);
+
+    // Width follows the slot's duration as before, but is never allowed to
+    // drop below whatever the course code needs at its smallest legible
+    // size — that's what used to force "UECS2033" down to "UECS2…".
+    const durationW = (s.durationMin / 60) * COL_W - 4;
+    const codeMinW  = s.courseCode.length * CODE_MIN_SIZE * CODE_CHAR_FACTOR + 14;
+    const w = Math.max(26, codeMinW, durationW);
     const h = ROW_H - 8;
     const fill = colourOf(s.courseCode);
     const inner = w - 14;   // usable text width after padding
 
     p.push(`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="6" fill="${fill}" opacity="0.93"/>`);
 
-    // Only draw what actually fits — prevents the overlapping text
-    p.push(`<text x="${x + 7}" y="${y + 18}" font-family="sans-serif" font-size="11.5" font-weight="600" fill="#ffffff">${esc(fit(s.courseCode, inner, 7.2))}</text>`);
+    // Course code: always shown in full. Font shrinks to fit the box
+    // instead of the text being cut off with an ellipsis.
+    const codeSize = fitFontSize(s.courseCode, inner, CODE_MAX_SIZE, CODE_MIN_SIZE, CODE_CHAR_FACTOR);
+    p.push(`<text x="${x + 7}" y="${y + 18}" font-family="sans-serif" font-size="${codeSize.toFixed(1)}" font-weight="600" fill="#ffffff">${esc(s.courseCode)}</text>`);
 
-    if (inner >= 64) {
+    // Type/group line — only drawn if there's reasonable room for it,
+    // shrinking the same way rather than being clipped.
+    if (inner >= 34) {
       const meta = `${s.type}${s.group ? ` · G${s.group}` : ""}`;
-      p.push(`<text x="${x + 7}" y="${y + 34}" font-family="sans-serif" font-size="10" fill="#f2f2f2">${esc(fit(meta, inner, 5.6))}</text>`);
+      const metaSize = fitFontSize(meta, inner, 10, 7, 0.56);
+      p.push(`<text x="${x + 7}" y="${y + 34}" font-family="sans-serif" font-size="${metaSize.toFixed(1)}" fill="#f2f2f2">${esc(meta)}</text>`);
     }
-    if (inner >= 78) {
+
+    // Time range — only drawn once there's room below the meta line.
+    if (inner >= 46) {
       const time = `${hhmm(s.startMin)}–${hhmm(s.startMin + s.durationMin)}`;
-      p.push(`<text x="${x + 7}" y="${y + 49}" font-family="sans-serif" font-size="9.5" fill="#e8e8e8">${esc(time)}</text>`);
+      const timeSize = fitFontSize(time, inner, 9.5, 6.5, 0.55);
+      p.push(`<text x="${x + 7}" y="${y + 49}" font-family="sans-serif" font-size="${timeSize.toFixed(1)}" fill="#e8e8e8">${esc(time)}</text>`);
     }
   }
 
