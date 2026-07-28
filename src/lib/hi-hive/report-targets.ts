@@ -280,3 +280,22 @@ export async function resolveScannedBy(
 export function scannedByHeader(label: string): string {
   return `📤 *Scanned by:* \`${label}\`\n`;
 }
+
+
+/**
+ * Is this chat one we must stay silent in?
+ *
+ * Computed live from the whitelist and reportSettings — deliberately NOT read
+ * from the scan_buffer row. The stored `origin_silent` column is newer than
+ * some rows and may be missing entirely if the migration hasn't run, and a
+ * missing value read as `false` is what let the ✅ overwrite the ❤️ on
+ * non-whitelisted groups.
+ *
+ * Private chats are never silent. Groups are silent unless whitelisted or named
+ * in reportSettings.
+ */
+export async function isSilentChat(chatId: string): Promise<boolean> {
+  if (!chatId.endsWith("@g.us")) return false;                     // PMs always talk
+  if (reportSettings.some(s => s.chatId === chatId)) return false;  // configured = allowed
+  return !(await isWhitelisted(chatId));
+}

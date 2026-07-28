@@ -29,7 +29,7 @@ import {
 import { scanOneAccount } from "./scan-runner.js";
 import { loadCreds } from "./creds.js";
 import { STATUS_META, type ReportStatus } from "./scan-status.js";
-import { includesStudent, includesStatus, scannedByHeader, type Destination } from "./report-targets.js";
+import { includesStudent, includesStatus, scannedByHeader, isSilentChat, type Destination } from "./report-targets.js";
 
 const TICK_MS = Number(process.env["SCAN_BUFFER_TICK_MS"] ?? 500);
 
@@ -143,9 +143,16 @@ export function startScanBufferService(sock: any) {
 
             // Destinations were resolved and stored when the batch was queued.
             // Fall back to a single report in the origin chat if absent.
-            const dests: Destination[] = (rows[0]?.destinations as Destination[] | null) ?? [
-              { chatId: job.chatId, status: "all", isOrigin: true, showDelay: true },
-            ];
+            // Recomputed live — never trusted from the row (see isSilentChat).
+            const silent = await isSilentChat(job.chatId);
+
+            /*
+            Stored destinations are the normal path. The fallback only matters if
+            the `destinations` column is absent — and it must NOT resurrect the
+            origin chat when that chat is meant to stay silent.
+            */
+            const dests: Destination[] = (rows[0]?.destinations as Destination[] | null)
+              ?? (silent ? [] : [{ chatId: job.chatId, status: "all", isOrigin: true, showDelay: true }]);
 
             console.log(`[scanBuffer] batch ${job.batchId}: ${dests.length} destination(s) to report to.`);
             let delivered = 0;
@@ -221,10 +228,9 @@ export function startScanBufferService(sock: any) {
             chat is actually a destination: if it isn't, the chat was meant to
             stay silent and must keep its ❤️.
             */
-            const originIsDestination = dests.some(d => d.chatId === job.chatId);
-            const silent = (rows[0]?.originSilent ?? false) || !originIsDestination;
-
-            if (!silent && rows[0]?.quotedKey) {
+            if (silent) {
+              console.log(`[scanBuffer] ${job.chatId} is silent — keeping ❤️, no ✅.`);
+            } else if (rows[0]?.quotedKey) {
               try {
                 await sock.sendMessage(job.chatId, {
                   react: { text: "✅", key: rows[0].quotedKey },
