@@ -8,8 +8,53 @@ const QR_SEPARATOR   = ":*:";
 const VALID_QR_TYPES = ["E01", "Q01", "Q02", "LQR", "CTR"];
 
 // UTAR Sungai Long campus GPS - required by the server
-const UTAR_LAT = "3.0543";
-const UTAR_LON = "101.7297";
+const UTAR_LAT = 3.0543;
+const UTAR_LON = 101.7297;
+
+/*
+GPS jitter
+──────────
+The portal requires coordinates. Previously every scan sent the identical
+hardcoded pair, so several accounts submitted byte-identical coordinates within
+seconds of each other.
+
+Each scan now draws its own point from a small disc centred on the campus
+coordinates. `sqrt(random())` on the radius is what makes the result uniform by
+AREA - using `random()` directly would cluster points toward the centre, which
+is its own recognisable pattern.
+
+Radius is in metres and configurable. Keep it modest: the portal may geofence,
+so a value far larger than the campus footprint risks rejection. ~75 m is about
+a lecture block and gives plenty of variation.
+*/
+const GPS_JITTER_M = Number(process.env["GPS_JITTER_METERS"] ?? 75);
+
+// Metres per degree of latitude (near enough constant)
+const M_PER_DEG_LAT = 111_320;
+
+/**
+ * A random point within `radiusM` of the given coordinates.
+ *
+ * Returns 6-decimal strings (~0.11 m resolution). The original 4-decimal
+ * literals could only express ~11 m steps, which would have quantised most of
+ * the jitter straight back out.
+ */
+function jitterCoords(lat: number, lon: number, radiusM: number): { lat: string; lon: string } {
+  if (radiusM <= 0) return { lat: lat.toFixed(6), lon: lon.toFixed(6) };
+
+  const angle    = Math.random() * 2 * Math.PI;
+  const distance = radiusM * Math.sqrt(Math.random());   // uniform over area
+
+  const dLat = (distance * Math.cos(angle)) / M_PER_DEG_LAT;
+  // Longitude degrees shrink with latitude, so the disc stays round on the ground
+  const dLon = (distance * Math.sin(angle)) /
+               (M_PER_DEG_LAT * Math.cos((lat * Math.PI) / 180));
+
+  return {
+    lat: (lat + dLat).toFixed(6),
+    lon: (lon + dLon).toFixed(6),
+  };
+}
 
 const UA_BROWSER: Record<string, string> = {
   "User-Agent":   "Mozilla/5.0 (Linux; Android 16; CPH2637) AppleWebKit/537.36 " +
@@ -24,9 +69,7 @@ const UA_BROWSER: Record<string, string> = {
 export interface ScanQrOptions {
   // Override UTAR_SCAN_URL env var
   scanUrl?: string;
-  // Path to creds.json. Default: next to this file
-  credsPath?: string;
-  // GPS coords to include in qrMessage. Defaults to UTAR Sungai Long.
+  // Exact GPS coords. When given, jitter is bypassed entirely.
   coords?: { lat: string; lon: string };
 }
 
@@ -41,9 +84,12 @@ export async function scanQr(
   rawQr: string,
   options: ScanQrOptions = {}
 ): Promise<ScanQrResult | undefined> {
-  const scanUrl   = options.scanUrl   ?? process.env["UTAR_SCAN_URL"] ?? "";
-  const lat       = options.coords?.lat ?? UTAR_LAT;
-  const lon       = options.coords?.lon ?? UTAR_LON;
+  const scanUrl = options.scanUrl ?? process.env["UTAR_SCAN_URL"] ?? "";
+
+  // Explicit coords win; otherwise scatter around campus for this scan.
+  const { lat, lon } = options.coords
+    ? { lat: options.coords.lat, lon: options.coords.lon }
+    : jitterCoords(UTAR_LAT, UTAR_LON, GPS_JITTER_M);
 
   if (!scanUrl) {
     return fail("network_error",
@@ -77,7 +123,7 @@ export async function scanQr(
 
   if (!creds.id || !creds.email) {
     return fail("auth_error",
-      "Missing id or email in Firestore hi_hive document. Both are required to generate a token.",
+      "Missing id or email for this account. Both are required to generate a token.",
       courseCode, expiry);
   }
 
@@ -107,6 +153,7 @@ export async function scanQr(
   //   rawQr + ":*:" + lat + ":*:" + lon + ":*:0"
   // GPS is REQUIRED - empty coords cause the server to silently return the scanner page
   const qrMessage = `${rawQr}${QR_SEPARATOR}${lat}${QR_SEPARATOR}${lon}${QR_SEPARATOR}0`;
+  console.log(`[scanQr] coords ${lat}, ${lon} (jitter ${GPS_JITTER_M}m)`);
 
   const step2Headers: Record<string, string> = {
     ...UA_BROWSER,
@@ -135,7 +182,6 @@ export async function scanQr(
   //   handleCallback('Exception: Internal server..')  => server error
   const cbMatch = htmlBody.match(/handleCallback\('([\s\S]*?)'\)/);
   const cbData  = cbMatch ? cbMatch[1].replace(/\\'/g, "'") : "";
-  const cbLower = cbData.toLowerCase();
 
   if (cbData) {
     // Extract server result image URL (Tick.png = success, Cross.png = failure)
@@ -156,7 +202,7 @@ export async function scanQr(
         ok: false, status: "auth_error",
         message:
           "Server error - the session may not be carrying student identity. " +
-          "Ensure id + email are set in your Firestore hi_hive document.",
+          "Ensure id + email are set for this account.",
         courseCode: null, expiry, imageUrl, serverResponse: cbLines.slice(0, 500),
       };
     }

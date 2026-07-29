@@ -19,6 +19,7 @@ import { tryAutoScan } from "./lib/hi-hive/auto-scan.js";
 import { startScanBufferService } from "./lib/hi-hive/scan-buffer-service.js";
 import { startWebhookQueue } from "./lib/webhook/webhook-queue.js";
 import { ensureSchema } from "./db/index.js";
+import { setSock } from "./lib/current-sock.js";
 
 /*
 Disconnect handling
@@ -67,6 +68,13 @@ async function startBot() {
             return stored?.message ?? undefined;
         }
     });
+
+    /*
+    Publish the socket so background services always send through the LIVE one.
+    A reconnect creates a new socket; services that captured the old reference
+    would keep failing with 428 Connection Closed until the process restarted.
+    */
+    setSock(sock);
 
     if (!sock.authState.creds.registered) {
         setTimeout(async () => {

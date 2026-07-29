@@ -185,3 +185,34 @@ export async function claimBatchReport(batchId: string): Promise<boolean> {
   `;
   return rows.length > 0;
 }
+
+
+/**
+ * Give the report claim back so a later tick can retry.
+ *
+ * Used when every destination failed — typically because the WhatsApp socket
+ * was closed at that moment. Without this the batch stayed flagged as reported
+ * and the result was lost even though the scans had succeeded.
+ */
+export async function releaseBatchReport(batchId: string): Promise<void> {
+  await sql`
+    UPDATE scan_buffer SET reported = FALSE WHERE batch_id = ${batchId}
+  `;
+}
+
+/**
+ * Batches whose jobs have all finished but whose report was never delivered.
+ * The normal completion path fires when the last job finishes; this is the
+ * recovery path for when that send failed (offline, socket closed, restart).
+ */
+export async function undeliveredBatches(limit = 5): Promise<string[]> {
+  const rows = await sql<{ batch_id: string }[]>`
+    SELECT batch_id
+    FROM scan_buffer
+    GROUP BY batch_id
+    HAVING COUNT(*) FILTER (WHERE status = 'pending') = 0
+       AND BOOL_AND(reported = FALSE)
+    LIMIT ${limit}
+  `;
+  return rows.map((r: any) => r.batch_id);
+}

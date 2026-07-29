@@ -24,12 +24,14 @@
 
 import {
   dueJobs, markDone, batchPendingCount, batchRows, deleteBatch, purgeStale, claimBatchReport,
+  releaseBatchReport, undeliveredBatches,
   type BufferRow,
 } from "./scan-buffer-db.js";
 import { scanOneAccount } from "./scan-runner.js";
 import { loadCreds } from "./creds.js";
 import { STATUS_META, type ReportStatus } from "./scan-status.js";
 import { includesStudent, includesStatus, scannedByHeader, isSilentChat, type Destination } from "./report-targets.js";
+import { getSock, isSockOpen } from "../current-sock.js";
 
 const TICK_MS = Number(process.env["SCAN_BUFFER_TICK_MS"] ?? 500);
 
@@ -91,7 +93,12 @@ function buildReport(rows: BufferRow[]): string {
   return `${header}📋 *AUTO SCAN REPORT*\n_${courses.length} courses_ · ${summary}\n\n${blocks.join("\n\n")}\n\n🏁 *Completed at:* \`${now}\``;
 }
 
-export function startScanBufferService(sock: any) {
+/*
+The socket is deliberately NOT captured here. It is read fresh from
+getSock() at each send, because a reconnect replaces the socket and a captured
+reference goes permanently dead. See src/lib/current-sock.ts.
+*/
+export function startScanBufferService(_sockIgnored?: any) {
   if (started) return;              // idempotent — safe across reconnects
   started = true;
   console.log("🗓️ Scan buffer service started (persisted queue).");
@@ -155,6 +162,20 @@ export function startScanBufferService(sock: any) {
               ?? (silent ? [] : [{ chatId: job.chatId, status: "all", isOrigin: true, showDelay: true }]);
 
             console.log(`[scanBuffer] batch ${job.batchId}: ${dests.length} destination(s) to report to.`);
+
+            /*
+            If the socket is down there is no point burning the claim — release
+            it and let a later tick retry once the connection is back. This is
+            exactly the case that used to lose reports: the scans succeeded but
+            the connection had dropped during the batch, so every send threw
+            428 Connection Closed and the batch was deleted anyway.
+            */
+            if (!isSockOpen()) {
+              console.warn(`[scanBuffer] socket is closed — deferring report for batch ${job.batchId}.`);
+              await releaseBatchReport(job.batchId);
+              continue;
+            }
+
             let delivered = 0;
 
             for (const dest of dests) {
@@ -183,7 +204,7 @@ export function startScanBufferService(sock: any) {
               let sent = false;
               if (dest.isOrigin && rows[0]?.quotedKey) {
                 try {
-                  await sock.sendMessage(dest.chatId, { text },
+                  await getSock()!.sendMessage(dest.chatId, { text },
                     { quoted: { key: rows[0].quotedKey, message: {} } as any });
                   sent = true;
                 } catch (quoteErr) {
@@ -192,7 +213,7 @@ export function startScanBufferService(sock: any) {
               }
               if (!sent) {
                 try {
-                  await sock.sendMessage(dest.chatId, { text });
+                  await getSock()!.sendMessage(dest.chatId, { text });
                 } catch (err) {
                   console.error(`[scanBuffer] report to ${dest.chatId} failed:`, err);
                   continue;
@@ -232,16 +253,22 @@ export function startScanBufferService(sock: any) {
               console.log(`[scanBuffer] ${job.chatId} is silent — keeping ❤️, no ✅.`);
             } else if (rows[0]?.quotedKey) {
               try {
-                await sock.sendMessage(job.chatId, {
+                await getSock()!.sendMessage(job.chatId, {
                   react: { text: "✅", key: rows[0].quotedKey },
                 });
               } catch { /* non-fatal */ }
             }
 
             if (delivered === 0) {
-              // Nothing got through. Keep it loud so the result isn't lost silently.
-              console.error(`[scanBuffer] ⚠️ batch ${job.batchId}: NO destination accepted the report.`);
+              /*
+              Nothing got through. Do NOT delete — release the claim so a later
+              tick retries. Rows are still purged after 24h, so this can't grow
+              unbounded, but a transient disconnect no longer costs the report.
+              */
+              console.error(`[scanBuffer] ⚠️ batch ${job.batchId}: no destination accepted the report — will retry.`);
               console.error(buildReport(rows).replace(/\*/g, ""));
+              await releaseBatchReport(job.batchId);
+              continue;
             }
 
             await deleteBatch(job.batchId);
@@ -262,6 +289,59 @@ export function startScanBufferService(sock: any) {
     }
   };
 
+  /*
+  Recovery sweep: batches whose jobs all finished but whose report never
+  reached anyone (socket was down at the time). The normal path only fires when
+  the LAST job completes, so without this a deferred report would never be
+  retried.
+  */
+  const sweep = async () => {
+    if (!isSockOpen()) return;
+    try {
+      const batchIds = await undeliveredBatches(5);
+      for (const batchId of batchIds) {
+        const rows = await batchRows(batchId);
+        if (rows.length === 0) continue;
+
+        if (!(await claimBatchReport(batchId))) continue;   // someone else has it
+
+        const dests: Destination[] = (rows[0]?.destinations as Destination[] | null)
+          ?? ((await isSilentChat(rows[0].chatId))
+                ? []
+                : [{ chatId: rows[0].chatId, status: "all", isOrigin: true, showDelay: true }]);
+
+        let delivered = 0;
+        for (const dest of dests) {
+          try {
+            let mine = rows.filter(r => includesStudent(dest, r.studentId));
+            if (mine.length === 0) {
+              if (!dest.isOrigin) continue;
+              mine = rows;
+            }
+            const passes = mine.some(r =>
+              includesStatus(dest, (r.resultStatus ?? "scan_failed") as ReportStatus));
+            if (!passes) continue;
+
+            await getSock()!.sendMessage(dest.chatId, { text: buildReport(mine) });
+            delivered++;
+            console.log(`[scanBuffer] 🔁 retried report → ${dest.chatId}`);
+          } catch (err) {
+            console.error(`[scanBuffer] retry to ${dest.chatId} failed:`, err);
+          }
+        }
+
+        if (delivered === 0) {
+          await releaseBatchReport(batchId);   // still down — try again later
+        } else {
+          await deleteBatch(batchId);
+          console.log(`[scanBuffer] ✅ batch ${batchId} delivered on retry.`);
+        }
+      }
+    } catch (err) {
+      console.error("[scanBuffer] sweep error:", err);
+    }
+  };
+
   // Immediate pass recovers anything that came due while the bot was offline
   void (async () => {
     try {
@@ -273,6 +353,7 @@ export function startScanBufferService(sock: any) {
     await tick();
   })();
   setInterval(tick, TICK_MS);
+  setInterval(() => { void sweep(); }, 15_000);   // retry undelivered reports
 
   // Hourly housekeeping
   setInterval(() => { void purgeStale(); }, 3_600_000);
