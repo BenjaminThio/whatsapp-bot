@@ -16,12 +16,40 @@ import { startBirthdayScheduler } from "./commands/birthday.js";
 import { activeSearches, savedPollMessages } from "./memory.js";
 import { startScheduleService } from "./commands/schedule.js";
 import { tryAutoScan } from "./lib/hi-hive/auto-scan.js";
-import { startWebhookQueue } from "./lib/webhook/webhook-queue.js";
-import { ensureSchema } from "./db/index.js";
 import { startScanBufferService } from "./lib/hi-hive/scan-buffer-service.js";
+import { startWebhookQueue } from "./lib/webhook/webhook-queue.js";
+import { ensureSchema } from "./lib/db/index.js";
+
+/*
+Disconnect handling
+───────────────────
+Only these genuinely require deleting auth and re-pairing. Everything else is
+transient and must reconnect.
+
+IMPORTANT: 428 (connectionClosed) and 515 (restartRequired) are NOT fatal.
+Pairing itself depends on them — after a pairing code is accepted WhatsApp
+closes the socket with 515 and expects an immediate reconnect. Treating those
+as fatal makes it impossible to ever finish pairing.
+*/
+const FATAL_CODES = new Set<number>([
+    DisconnectReason.loggedOut,           // 401 — session revoked
+    DisconnectReason.forbidden,           // 403 — account blocked
+    DisconnectReason.badSession,          // 500 — corrupt keys
+    DisconnectReason.multideviceMismatch, // 411 — relink required
+    405,                                  // connectionFailure — stale session
+]);
+
+let reconnectAttempts = 0;
+const MAX_BACKOFF_MS = 60_000;
 
 async function startBot() {
-    await ensureSchema();
+    // Create Postgres tables if they don't exist yet
+    try {
+        await ensureSchema();
+    } catch (err) {
+        console.error("🐘 Could not ensure Postgres schema:", err);
+    }
+
     await loadCommands();
 
     const { state, saveCreds } = await useMultiFileAuthState("auth_info_baileys");
@@ -50,7 +78,8 @@ async function startBot() {
 
                 console.log(`\n📱 YOUR PAIRING CODE: ${code}`);
                 console.log("➡️ Open WhatsApp > Linked Devices > Link with phone number instead.");
-                console.log("➡️ Enter the code above!\n");
+                console.log("➡️ Enter the code above!");
+                console.log("➡️ The bot will disconnect with code 515 and reconnect itself — that's normal.\n");
             } catch (error) {
                 console.log("Failed to request code:", error);
             }
@@ -62,27 +91,51 @@ async function startBot() {
     sock.ev.on("connection.update", (update) => {
         const { connection, lastDisconnect } = update;
 
-        if (connection === "close") {
-            const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-            const fatalCodes = [DisconnectReason.loggedOut, 405, 428, 403];
-            const isFatal = fatalCodes.includes(statusCode);
-
-            console.log(`🔴 Connection closed (Reason code: ${statusCode}).`);
-
-            if (isFatal) {
-                console.log("🚫 FATAL ERROR: Session invalid. Delete 'auth_info_baileys' and restart.");
-                process.exit(1);
-            } else {
-                console.log("🔄 Reconnecting in 3 seconds...");
-                setTimeout(startBot, 3000);
-            }
-        } else if (connection === "open") {
+        if (connection === "open") {
+            reconnectAttempts = 0;                 // healthy again
             console.log("🟢 Bot is online and ready!");
             startBirthdayScheduler(sock);
             startScheduleService(sock);
             startWebhookQueue(sock);
             startScanBufferService(sock);
+            return;
         }
+
+        if (connection !== "close") return;
+
+        const statusCode: number | undefined =
+            (lastDisconnect?.error as any)?.output?.statusCode;
+
+        console.log(`🔴 Connection closed (code ${statusCode ?? "unknown"}).`);
+
+        // 515 — expected right after pairing. Reconnect at once, no backoff.
+        if (statusCode === DisconnectReason.restartRequired) {
+            console.log("🔄 Restart required (normal after pairing) — reconnecting now...");
+            setTimeout(startBot, 1000);
+            return;
+        }
+
+        // 440 — another session took over. Reconnect, but say so loudly: this
+        // means the bot is running in two places against the same account.
+        if (statusCode === DisconnectReason.connectionReplaced) {
+            console.warn("⚠️ Connection replaced — another instance is using this session.");
+            console.warn("   Running the bot on both PC and Termux at once will cause this.");
+            setTimeout(startBot, 5000);
+            return;
+        }
+
+        if (statusCode !== undefined && FATAL_CODES.has(statusCode)) {
+            console.log("🚫 FATAL: session is invalid.");
+            console.log("   Delete the 'auth_info_baileys' folder and restart to re-pair.");
+            process.exit(1);
+        }
+
+        // Transient — reconnect with capped exponential backoff so an outage
+        // doesn't become a reconnect storm.
+        reconnectAttempts++;
+        const delay = Math.min(3000 * 2 ** (reconnectAttempts - 1), MAX_BACKOFF_MS);
+        console.log(`🔄 Reconnecting in ${Math.round(delay / 1000)}s (attempt ${reconnectAttempts})...`);
+        setTimeout(startBot, delay);
     });
 
     sock.ev.on("messages.upsert", async ({ messages, type }) => {
@@ -106,7 +159,15 @@ async function startBot() {
                 continue;
             }
 
-            if (await tryAutoScan(sock, msg)) continue;
+            /*
+            AUTO-SCAN
+            Runs before command dispatch so a bare image (no caption) is still
+            inspected. tryAutoScan has its own duplicate-delivery guard, so the
+            'notify' + 'append' double delivery above cannot double-scan.
+            */
+            if (await tryAutoScan(sock, msg)) {
+                continue;
+            }
 
             /*
             COMMAND DISPATCH
@@ -188,7 +249,6 @@ async function handlePollVote(sock: any, msg: any, messageBody: any, meId?: stri
         // If using "whitelist" mode, put the allowed JIDs here:
         const WHITELIST = new Set<string>([
             // "60123456789@s.whatsapp.net",
-            // "60198765432@s.whatsapp.net",
         ]);
 
         let authorized = false;
@@ -204,23 +264,6 @@ async function handlePollVote(sock: any, msg: any, messageBody: any, meId?: stri
             console.log(`❌ [REJECTED] Voter ${realVoterJid} not allowed (policy: ${ALLOWED_VOTERS}, requester was: ${searchSession.requester})`);
             return;
         }
-
-        /*
-        DIAGNOSTIC HARNESS - prints everything and tries every combo.
-        Remove this verbose logging once we identify the working combo.
-        */
-        console.log("---- 🔬 CROSS-ACCOUNT VOTE DEEP DUMP ----");
-        console.log("Stored poll key:", JSON.stringify(originalPollMessage.key));
-        console.log("Incoming msg key:", JSON.stringify(msg.key));
-        console.log("sock.user.id:    ", sock.user?.id);
-        console.log("sock.user.lid:   ", (sock.user as any)?.lid);
-        console.log("meId (normalized):", meId);
-        console.log("realVoterJid:    ", realVoterJid);
-        console.log("session.requester:", searchSession.requester);
-        console.log("messageSecret length:", pollEncKey.length);
-        console.log("vote.encPayload length:", messageBody.pollUpdateMessage.vote?.encPayload?.length);
-        console.log("vote.encIv length:     ", messageBody.pollUpdateMessage.vote?.encIv?.length);
-        console.log("------------------------------------------");
 
         const ownJid = jidNormalizedUser(sock.user?.id ?? "");
         const ownLid = (sock.user as any)?.lid ? jidNormalizedUser((sock.user as any).lid) : null;
@@ -243,7 +286,6 @@ async function handlePollVote(sock: any, msg: any, messageBody: any, meId?: stri
         }
 
         let decryptedVote: any = null;
-        let successLabel = "";
         for (const attempt of allAttempts) {
             try {
                 decryptedVote = decryptPollVote(
@@ -255,10 +297,7 @@ async function handlePollVote(sock: any, msg: any, messageBody: any, meId?: stri
                         voterJid: attempt.voter,
                     } as any
                 );
-                successLabel = attempt.label;
                 console.log(`✅ DECRYPTED via "${attempt.label}"`);
-                console.log(`   creator: ${attempt.creator}`);
-                console.log(`   voter:   ${attempt.voter}`);
                 break;
             } catch (e: any) {
                 console.log(`   ❌ ${attempt.label} - creator=${attempt.creator} voter=${attempt.voter}`);
@@ -266,7 +305,7 @@ async function handlePollVote(sock: any, msg: any, messageBody: any, meId?: stri
         }
 
         if (!decryptedVote) {
-            console.log("❌ Every combination failed. Paste the deep dump above so we can debug.");
+            console.log("❌ Every combination failed.");
             return;
         }
 
