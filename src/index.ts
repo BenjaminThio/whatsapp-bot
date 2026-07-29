@@ -18,7 +18,7 @@ import { startScheduleService } from "./commands/schedule.js";
 import { tryAutoScan } from "./lib/hi-hive/auto-scan.js";
 import { startScanBufferService } from "./lib/hi-hive/scan-buffer-service.js";
 import { startWebhookQueue } from "./lib/webhook/webhook-queue.js";
-import { ensureSchema } from "./lib/db/index.js";
+import { ensureSchema } from "./db/index.js";
 
 /*
 Disconnect handling
