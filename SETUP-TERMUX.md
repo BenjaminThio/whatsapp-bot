@@ -4,7 +4,8 @@ Everything, Postgres included, lives **inside the Ubuntu proot**. Nothing is
 mounted across from Termux, so there is one filesystem, one set of paths, and no
 `/data/data/com.termux/...` links to keep straight.
 
-Steps 0 to 2 run in Termux. Everything from step 3 runs inside Ubuntu.
+Step 0 runs in your current install. After that, take **the fast path** just
+below, or work through the manual steps it automates.
 
 ---
 
@@ -42,6 +43,84 @@ You need roughly **3 GB free** for the finished install: 740 MB of assets,
 350 MB of `node_modules`, ~1 GB for Ubuntu and the toolchain, plus the venv.
 
 ---
+
+## The fast path
+
+Four commands, start to finish. Each is explained in the manual steps below if
+you would rather see what it does.
+
+**In Termux**, after reinstalling it:
+
+```bash
+pkg update -y && pkg install -y proot-distro git tmux && termux-setup-storage
+```
+
+```bash
+proot-distro install ubuntu && proot-distro login ubuntu
+```
+
+**Inside Ubuntu**, clone the project and run the installer:
+
+```bash
+mkdir -p ~/bots && cd ~/bots && git clone <your-repo-url> lasma-bot && bash lasma-bot/scripts/setup.sh
+```
+
+`setup.sh` does the other eleven steps: packages, locale, Bun, the Postgres
+cluster and role, dependencies, the venv, the backup restore, the schema, the
+dict binaries, the chess addon, then a verification pass. If `shared/.env` is
+missing and there is no backup it stops and asks you for each secret, so have
+your keys to hand.
+
+Every step checks whether it is already done, so it is safe to re-run. If
+something fails it says which step, and you fix it and re-run just that one:
+
+```bash
+bash scripts/setup.sh --only 3
+```
+
+```bash
+bash scripts/setup.sh --list      # what the steps are
+bash scripts/setup.sh --from 6    # resume from step 6
+```
+
+**Back in Termux**, install the shortcuts so you never have to log into Ubuntu
+by hand again:
+
+```bash
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-install.sh && source ~/.bashrc
+```
+
+Then `w` starts the WhatsApp bot and `t` starts the Telegram one, from the
+Termux prompt.
+
+### Secrets, without nano
+
+```bash
+bash ~/bots/lasma-bot/scripts/configure-env.sh
+```
+
+It walks every key both bots read, one prompt at a time, with a description of
+what each is for. It shows any value that is already set and keeps it if you
+just press Enter, so re-running it to change one key is safe. Blank keys are
+written commented out, and the feature that needs them degrades rather than
+crashing. It writes `shared/.env` and `telegram/.env`, chmod 600, backing up
+whatever was there as `.bak`.
+
+```bash
+scripts/configure-env.sh --show       # what is set, secrets masked
+scripts/configure-env.sh --postgres   # only the database block
+```
+
+The Postgres block is asked first because `setup.sh` reads `PGPASSWORD` back
+out of `shared/.env` and creates the database role with it. Choose the password
+here and nothing else needs to know it.
+
+---
+
+## Manual steps
+
+Everything below is what `setup.sh` automates. Read it if a step fails, or if
+you would rather drive it yourself.
 
 ## 1. Termux, from scratch
 
@@ -274,15 +353,29 @@ current directory, which is why that variable is on the front of the command.
 The bot sets it for you.
 
 **Rebuilding the index from scratch**, only if you have no `dict.dat`. This
-downloads 1.2 GB, expands to 11 GB, and takes hours on a phone:
+downloads 1.2 GB, expands to 11 GB, and takes hours on a phone.
+
+Decompress as it downloads, so the 1.2 GB archive is never stored, and put the
+XML on `/sdcard` where there is room:
+
+```bash
+wget -O - https://dumps.wikimedia.org/enwiktionary/latest/enwiktionary-latest-pages-articles.xml.bz2 \
+  | bunzip2 > /sdcard/enwiktionary.xml
+```
+
+`dict_indexer` takes an output directory as its second argument, so the 11 GB
+input can stay on `/sdcard` while the index is written straight into the dict
+folder. Nothing large ever has to sit inside the proot:
 
 ```bash
 cd ~/bots/lasma-bot/shared/assets/dict
-wget https://dumps.wikimedia.org/enwiktionary/latest/enwiktionary-latest-pages-articles.xml.bz2
-bunzip2 enwiktionary-latest-pages-articles.xml.bz2
-./dict_indexer enwiktionary-latest-pages-articles.xml
-rm enwiktionary-latest-pages-articles.xml
+./dict_indexer /sdcard/enwiktionary.xml ~/bots/lasma-bot/shared/assets/dict
+rm /sdcard/enwiktionary.xml
 ```
+
+If the download drops partway, `wget -c` cannot resume this because the stream
+is being decompressed on the fly. To resume, download the `.bz2` to a file
+instead (`wget -c -O /sdcard/ew.xml.bz2 <url>`), then `bunzip2` it separately.
 
 ## 11. The chess renderer (optional)
 
@@ -296,31 +389,85 @@ It detects ARM64 and builds with `-O3 -mcpu=native` plus LTO, writing
 unavailable; the bot probes the addon in a child process at startup, notices,
 and keeps running. Nothing else is affected.
 
-## 12. Start them
+## 12. The w and t shortcuts
+
+Install them **from Termux**, not from inside Ubuntu, so you can start a bot
+without logging into the proot first:
 
 ```bash
-cd ~/bots/lasma-bot
-
-tmux new -d -s wa 'cd ~/bots/lasma-bot && bun run whatsapp'
-tmux new -d -s tg 'cd ~/bots/lasma-bot && bun run telegram'
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-install.sh
+source ~/.bashrc
 ```
+
+From then on, straight from the Termux prompt:
 
 ```bash
-tmux attach -t wa     # watch the WhatsApp bot; detach again with Ctrl-B then D
-tmux attach -t tg
-tmux ls               # what is running
+w          # start the WhatsApp bot if it is down, then watch it
+t          # the same for Telegram
+lasma      # both
+ub         # drop into an Ubuntu shell, when you want one
 ```
 
-If you did not restore `auth_info_baileys`, attach to the `wa` session on the
-first run: it prints a QR code that you scan from WhatsApp on the phone.
+The tmux server runs **in Termux** and each session enters the proot on its
+own. That ordering matters: it means the bots keep running when you exit
+Ubuntu, and `w status` works from a plain Termux prompt without starting a
+proot just to answer the question.
+
+Inside Ubuntu the same commands are available, and manage the same bots, if you
+install them there too:
+
+```bash
+bash ~/bots/lasma-bot/scripts/lasma.sh install && source ~/.bashrc
+```
+
+`lasma.sh` detects which side it is on and does the right thing either way.
+
+Each bot runs under `scripts/supervise.sh` in its own tmux session, so it keeps
+running when you close Termux and **restarts itself whenever it dies**.
+
+| | |
+| --- | --- |
+| `w` | start if needed, then attach. Detach with Ctrl-B then D |
+| `w status` | running or not, and since when |
+| `w log` | follow the log, including across restarts |
+| `w restart` | |
+| `w stop` | stop it *and* stop the supervisor restarting it |
+| `lasma start` | both, without attaching |
+| `lasma status` | both |
+
+`w stop` is the only way to bring a bot down for good. Killing the bot process
+alone just makes the supervisor start it again, which is the point.
+
+Postgres is started by the supervisor itself if it is down. proot has no
+systemd, and a bot launched from Termux gets a non-interactive shell where the
+`~/.bashrc` hook never fires, so this is the only reliable place to do it.
+
+**How the restarting behaves.** A crash is retried after 5s, then 10, 20, 40,
+up to a 5 minute ceiling, so a bot that cannot start (bad token, missing env
+var) will not spin the CPU retrying. Once a bot has stayed up for a minute the
+delay resets to 5s, so a genuine one-off fault is recovered from quickly. A
+clean exit or a Ctrl-C is treated as deliberate and is not restarted. The
+supervisor also waits for Postgres before each start, since the bots exit
+immediately when the database is unreachable and would otherwise burn the whole
+backoff ladder on a reboot.
+
+Logs go to `logs/whatsapp.log` and `logs/telegram.log`, trimmed at 20 MB.
+
+If you did not restore `auth_info_baileys`, run `w` on the first start: the QR
+code appears in the attached session, and you scan it from WhatsApp.
 
 Keep Termux alive in the background with **Termux -> notification -> Acquire
 wakelock**, and exclude it from Android battery optimisation. Without that,
-Android kills both bots within minutes of the screen going off.
+Android kills both bots within minutes of the screen going off, and no amount
+of supervising helps because the supervisor gets killed too.
 
-`bun run whatsapp` and `bun run telegram` run the bots without file watching.
-Use `bun run dev:whatsapp` / `bun run dev:telegram` when you are editing code
-and want a restart on save.
+**Without the shortcuts**, or to run in the foreground while editing code:
+
+```bash
+cd ~/bots/lasma-bot
+bun run whatsapp        # no watcher
+bun run dev:whatsapp    # restarts on save
+```
 
 ---
 
@@ -337,6 +484,7 @@ ffmpeg -version | head -1
 DICT_DIR=$PWD/shared/assets/dict ./shared/assets/dict/dict_lookup test | head -2
 ls -la shared/assets/data/emoji.jsonl        # 60 MB
 ls -la shared/assets/dict/dict.dat           # ~680 MB
+bash scripts/lasma.sh both status             # both bots
 ```
 
 ## If something breaks

@@ -12,6 +12,9 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+# configure-env.sh keeps the previous version alongside the new one
+.env.bak
+*.env.bak
 
 # hi-hive credentials: student ids, session tokens, fcm tokens, AES material.
 # shared/hi-hive/creds.json and shared/hi-hive/legacy/creds.json are BOTH real.
