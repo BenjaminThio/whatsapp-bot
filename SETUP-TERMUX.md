@@ -67,9 +67,14 @@ mkdir -p ~/bots && cd ~/bots && git clone <your-repo-url> lasma-bot && bash lasm
 
 `setup.sh` does the other eleven steps: packages, locale, Bun, the Postgres
 cluster and role, dependencies, the venv, the backup restore, the schema, the
-dict binaries, the chess addon, then a verification pass. If `shared/.env` is
+dict index, the chess addon, then a verification pass. If `shared/.env` is
 missing and there is no backup it stops and asks you for each secret, so have
 your keys to hand.
+
+Two things it will do that take real time and data, both only when the file is
+missing and no backup supplied it: building the Wiktionary index (~1.2 GB
+downloaded, ~11 GB temporary, hours of indexing, all of it cleaned up
+afterwards) and compiling the chess addon. Skip the first with `--skip-dict`.
 
 Every step checks whether it is already done, so it is safe to re-run. If
 something fails it says which step, and you fix it and re-run just that one:
@@ -352,30 +357,63 @@ DICT_DIR=$PWD/shared/assets/dict ./shared/assets/dict/dict_lookup water | head -
 current directory, which is why that variable is on the front of the command.
 The bot sets it for you.
 
-**Rebuilding the index from scratch**, only if you have no `dict.dat`. This
-downloads 1.2 GB, expands to 11 GB, and takes hours on a phone.
+**No `dict.dat`?** `setup.sh` builds it for you. There is nothing to do by
+hand - step 9 notices it is missing and runs `scripts/build-dict.sh`, which
+downloads the Wiktionary dump, expands it, indexes it, verifies the result with
+a real lookup, and then **deletes everything it downloaded**.
 
-Decompress as it downloads, so the 1.2 GB archive is never stored, and put the
-XML on `/sdcard` where there is room:
-
-```bash
-wget -O - https://dumps.wikimedia.org/enwiktionary/latest/enwiktionary-latest-pages-articles.xml.bz2 \
-  | bunzip2 > /sdcard/enwiktionary.xml
-```
-
-`dict_indexer` takes an output directory as its second argument, so the 11 GB
-input can stay on `/sdcard` while the index is written straight into the dict
-folder. Nothing large ever has to sit inside the proot:
+Be aware of what that costs before you let it run: ~1.2 GB downloaded, ~11 GB
+of temporary disk, and a few hours of indexing on phone hardware. Skip it with:
 
 ```bash
-cd ~/bots/lasma-bot/shared/assets/dict
-./dict_indexer /sdcard/enwiktionary.xml ~/bots/lasma-bot/shared/assets/dict
-rm /sdcard/enwiktionary.xml
+bash scripts/setup.sh --skip-dict
 ```
 
-If the download drops partway, `wget -c` cannot resume this because the stream
-is being decompressed on the fly. To resume, download the `.bz2` to a file
-instead (`wget -c -O /sdcard/ew.xml.bz2 <url>`), then `bunzip2` it separately.
+and `/dict` is simply unavailable until you build it later. Everything else
+works.
+
+To run it on its own, or to resume after an interruption:
+
+```bash
+bash scripts/build-dict.sh
+```
+
+It is safe to re-run at any point. The download uses `wget -c`, and each stage
+is skipped when its output already exists, so an interrupted build continues
+instead of starting over. Ctrl-C keeps the partial download on purpose.
+
+```bash
+bash scripts/build-dict.sh --force        # rebuild even though dict.dat exists
+bash scripts/build-dict.sh --keep         # keep the XML afterwards
+bash scripts/build-dict.sh --work /path   # stage the big files elsewhere
+```
+
+It stages into `/sdcard/lasma-work` by default, falling back to somewhere with
+room, and refuses to start at all unless the space is actually there - so a
+half-finished build cannot fill the phone. The XML is only deleted once
+`dict_lookup water` has returned a real definition; if verification fails the
+XML is kept so you can retry the indexing without downloading again.
+
+**No `emoji.jsonl`?** Also handled, by step 10. It scrapes Emojipedia using
+`shared/assets/data/emoji-src/scrape_emoji.py`, seeded from the `raw_emoji.json`
+that ships with the repo.
+
+```bash
+bash scripts/build-emoji.sh                # full, with design history
+bash scripts/build-emoji.sh --no-designs   # ~2 MB instead of ~60 MB, far faster
+bash scripts/build-emoji.sh --verify       # check what you have
+bash scripts/build-emoji.sh --repair       # re-scrape incomplete entries
+```
+
+The design history is what costs: a real browser over 5,225 pages, many hours.
+`--no-designs` is plain HTTP and needs no browser, at the cost of `/emoji` not
+showing the per-platform artwork timeline. On ARM, Playwright often has no
+Chromium build at all - `setup.sh` notices and falls back to `--no-designs`
+rather than leaving you with nothing.
+
+It resumes automatically: whatever is already in the file is skipped, so an
+interrupted run continues and re-running never duplicates an entry. Skip it
+with `--skip-emoji`, or skip both large assets with `--skip-assets`.
 
 ## 11. The chess renderer (optional)
 

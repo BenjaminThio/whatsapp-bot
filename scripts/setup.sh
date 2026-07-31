@@ -30,7 +30,8 @@ STEP_NAMES=(
     "Python venv"
     "restore backup"
     "database schema"
-    "dict binaries"
+    "dict index"
+    "emoji dataset"
     "chess renderer (optional)"
     "verify"
 )
@@ -262,12 +263,66 @@ step_9_dict() {
         else
             warn "binary built but the index did not open"
         fi
+        return
+    fi
+
+    if [ "$SKIP_DICT" -eq 1 ]; then
+        warn "no dict.dat and --skip-dict was passed - /dict stays unavailable"
+        return
+    fi
+
+    echo
+    echo "  ${bold}dict.dat is missing and no backup had it.${off}"
+    echo "  Building it means downloading ~1.2 GB, expanding it to ~11 GB and"
+    echo "  indexing for a few hours. Everything downloaded is deleted afterwards."
+    echo "  Skip with:  bash scripts/setup.sh --skip-dict"
+    echo
+
+    if bash "$ROOT/scripts/build-dict.sh"; then
+        ok "dict index built"
     else
-        warn "no dict.dat - /dict is unavailable until you restore or rebuild it"
+        warn "dict build did not finish - re-run scripts/build-dict.sh to resume"
     fi
 }
 
-step_10_chess() {
+step_10_emoji() {
+    local out="$ROOT/shared/assets/data/emoji.jsonl"
+
+    if [ -f "$out" ]; then
+        skip "emoji.jsonl present ($(( $(wc -c < "$out") / 1048576 )) MB)"
+        return
+    fi
+
+    if [ "$SKIP_EMOJI" -eq 1 ]; then
+        warn "no emoji.jsonl and --skip-emoji was passed - /emoji stays unavailable"
+        return
+    fi
+
+    echo
+    echo "  ${bold}emoji.jsonl is missing and no backup had it.${off}"
+    echo "  Scraping it with the full design history means driving a real browser"
+    echo "  over 5,225 pages - many hours. Without designs it is a few thousand"
+    echo "  plain requests and a much smaller file."
+    echo "  Skip entirely with:  bash scripts/setup.sh --skip-emoji"
+    echo
+
+    if bash "$ROOT/scripts/build-emoji.sh"; then
+        ok "emoji dataset built"
+        return
+    fi
+
+    # Playwright often has no browser build for ARM, which is exactly where this
+    # runs. Falling back leaves a working /emoji minus the artwork history,
+    # rather than leaving the command broken entirely.
+    warn "full scrape unavailable - retrying without the design history"
+    if bash "$ROOT/scripts/build-emoji.sh" --no-designs; then
+        ok "emoji dataset built (no design history)"
+    else
+        warn "emoji scrape failed - re-run scripts/build-emoji.sh to resume"
+    fi
+}
+
+step_11_chess() {
     cd "$ROOT/telegram" 2>/dev/null || return
     if [ -f src/pixelforge/build/Release/App.node ]; then
         skip "addon built"
@@ -280,7 +335,7 @@ step_10_chess() {
     fi
 }
 
-step_11_verify() {
+step_12_verify() {
     cd "$ROOT" || return
     pg_isready -q 2>/dev/null && ok "postgres reachable" || die "postgres unreachable"
     [ -d node_modules ] && ok "dependencies" || die "node_modules missing"
@@ -292,13 +347,21 @@ step_11_verify() {
     [ -d whatsapp/auth_info_baileys ] && ok "whatsapp pairing" || warn "whatsapp will show a QR on first start"
 }
 
-FROM=1; TO=${#STEP_NAMES[@]}
-case "${1:-}" in
-    --list) for i in "${!STEP_NAMES[@]}"; do echo "$((i + 1)). ${STEP_NAMES[$i]}"; done; exit 0 ;;
-    --from) FROM=${2:-1} ;;
-    --only) FROM=${2:-1}; TO=${2:-1} ;;
-    --help|-h) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
-esac
+FROM=1; TO=${#STEP_NAMES[@]}; SKIP_DICT=0; SKIP_EMOJI=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --list) for i in "${!STEP_NAMES[@]}"; do echo "$((i + 1)). ${STEP_NAMES[$i]}"; done; exit 0 ;;
+        --from) FROM=${2:-1}; shift ;;
+        --only) FROM=${2:-1}; TO=${2:-1}; shift ;;
+        --skip-dict) SKIP_DICT=1 ;;
+        --skip-emoji) SKIP_EMOJI=1 ;;
+        --skip-assets) SKIP_DICT=1; SKIP_EMOJI=1 ;;
+        --help|-h) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
+        *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
 
 echo "${bold}Lasma setup${off}  ->  $ROOT"
 [ -d "$BACKUP" ] && echo "backup: $BACKUP" || echo "backup: none at $BACKUP (fresh install)"
@@ -309,7 +372,7 @@ for i in $(seq "$FROM" "$TO"); do
         1) step_1_packages ;;  2) step_2_bun ;;      3) step_3_postgres ;;
         4) step_4_env ;;       5) step_5_deps ;;     6) step_6_venv ;;
         7) step_7_restore ;;   8) step_8_schema ;;   9) step_9_dict ;;
-        10) step_10_chess ;;  11) step_11_verify ;;
+        10) step_10_emoji ;;  11) step_11_chess ;;  12) step_12_verify ;;
     esac
 done
 

@@ -11,3 +11,9 @@ soundfile       # denoise_engine.py
 numpy           # denoise_engine.py
 yt_dlp          # music_engine.py - /play
 beautifulsoup4  # scraping helpers
+requests        # emoji-src/scrape_emoji.py
+
+# Only needed to rebuild the emoji dataset with its design history, which is a
+# once-in-a-blue-moon job and pulls a ~150 MB browser. scripts/build-emoji.sh
+# installs it on demand, so it is deliberately not listed as a hard dependency:
+#   playwright

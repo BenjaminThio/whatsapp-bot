@@ -47,13 +47,17 @@ shared/assets/dict/dict_indexer
 # backup, or rebuild the index with shared/assets/dict/src/dict_indexer.c.
 shared/assets/dict/dict.dat
 shared/assets/dict/dict.idx
-shared/assets/data/emoji.jsonl
+# shared/assets/data/emoji.jsonl
 
 # The raw Wiktionary dump - 11 GB, and only ever an input to the indexer.
 enwiktionary-*.xml
+enwiktionary-*.xml.bz2
+
+# Where build-dict.sh stages the dump when /sdcard is not available.
+.dictwork/
 
 # Generated on first use, rebuilt whenever the dataset changes.
-shared/assets/data/emoji.index.json
+# shared/assets/data/emoji.index.json
 
 # ── Logs / caches / coverage ─────────────────────────────────────────────────
 *.log
