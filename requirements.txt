@@ -1,0 +1,13 @@
+# Python packages the media engines need. One venv at the workspace root
+# serves both bots - see shared/lib/subprocess.ts.
+#
+#   python -m venv .venv
+#   .venv/Scripts/pip install -r requirements.txt   (Windows)
+#   .venv/bin/pip install -r requirements.txt       (Linux / Termux)
+
+gTTS            # gtts_engine.py  - /say, /dict pronunciation
+rembg           # rembg_engine.py - /removebg
+soundfile       # denoise_engine.py
+numpy           # denoise_engine.py
+yt_dlp          # music_engine.py - /play
+beautifulsoup4  # scraping helpers

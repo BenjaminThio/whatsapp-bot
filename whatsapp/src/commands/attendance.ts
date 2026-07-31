@@ -1,0 +1,171 @@
+import { WAMessage, WASocket } from "@whiskeysockets/baileys";
+import { Command, CommandContext } from "./_types.js";
+import { getAttendance } from "../../../shared/hi-hive/get-attendance.js";
+import type { GetAttendanceResult, AttendanceCourse } from "../../../shared/hi-hive/types.js";
+import { cmd } from "../config/prefixes.js";
+import { queueReply, reactNow } from "../lib/outbox.js";
+
+/*
+  !attendance [course_code]
+
+  Fetches UTAR attendance via the web portal, parses the HTML report into
+  structured data, and formats it exactly like the old hi-hive formatter:
+    - Student profile header
+    - Per-course progress bar with attended/total hours
+    - Per-session records with status emoji
+    - Overall % at the bottom
+
+  Usage:
+    !attendance               - full report, all courses
+    !attendance UECS2194      - filter to one course (case-insensitive substring)
+*/
+
+// Formatter (restored from old hi-hive formatter)
+const PCT_BAR_LEN = 10;
+
+function pctBar(pct: number | null): string {
+  if (pct === null) return "▒".repeat(PCT_BAR_LEN) + " -";
+  const filled = Math.round((pct / 100) * PCT_BAR_LEN);
+  const bar = "█".repeat(filled) + "░".repeat(PCT_BAR_LEN - filled);
+  const icon = pct >= 80 ? "✅" : pct >= 60 ? "⚠️" : "❌";
+  return `${bar} ${pct}% ${icon}`;
+}
+
+function statusEmoji(status: string | null): string {
+  switch (status) {
+    case "A": return "✅";
+    case "D": return "❌";
+    case "L": return "🏖️";
+    case "N": return "➖";
+    default:  return "❓";
+  }
+}
+
+function formatCourse(c: AttendanceCourse): string {
+  const lines: string[] = [];
+  const att = c.attended === null ? "-" : c.attended.toFixed(1);
+  const tot = c.total    === null ? "-" : c.total.toFixed(1);
+
+  lines.push(`\n📚 *${c.name ?? c.code ?? "?"}*`);
+  lines.push(`   ${pctBar(c.percent)}  (${att}/${tot}h)`);
+
+  for (const rec of c.records) {
+    const who  = rec.recordedByName ?? rec.recordedByEmail ?? "?";
+    const when = rec.classDatetime  ?? "?";
+    lines.push(`   ${statusEmoji(rec.status)} ${when}  _by ${who}_`);
+  }
+
+  return lines.join("\n");
+}
+
+export function formatAttendance(result: GetAttendanceResult, courseFilter?: string): string {
+  // Error states
+  if (!result.ok) {
+    return (
+      `❌ *Attendance Error*\n${result.message}\n\n` +
+      `💡 Make sure _utarStudentId_ or _utarEncryptedData_ is in creds.json,\n` +
+      `and _UTAR_SCAN_URL_ / _UTAR_REPORT_URL_ env vars are set.`
+    );
+  }
+
+  if (result.no_record) {
+    return (
+      "⚠️ *No attendance record found.*\n" +
+      (courseFilter
+        ? `No courses matching _${courseFilter}_.`
+        : "The report page returned no course data.")
+    );
+  }
+
+  // courses[] is empty but message has raw text - parser couldn't read the
+  // HTML table structure. Show the raw text so you can diagnose + send it to
+  // the dev to fix the parser. Set DEBUG_ATTENDANCE=1 to also dump the HTML.
+  if (result.courses.length === 0 && result.message !== "OK") {
+    return (
+      `📋 *Attendance (raw - table parse failed)*\n` +
+      `_Set DEBUG_ATTENDANCE=1 and check /tmp/utar_attendance_debug.html_\n\n` +
+      `${"─".repeat(36)}\n` +
+      result.message
+    );
+  }
+
+  const lines: string[] = [];
+
+  // Profile header
+  const prof = result.profile;
+  if (prof?.name || prof?.studentId) {
+    lines.push(`👤 *${prof.name ?? "?"}* (${prof.studentId ?? "?"})`);
+    if (prof.session) lines.push(`📅 Session: ${prof.session}`);
+  }
+  lines.push("─".repeat(36));
+
+  // Course rows
+  if (result.courses.length === 0) {
+    lines.push(courseFilter
+      ? `No course matching _${courseFilter}_ found.`
+      : "No course data available.");
+    return lines.join("\n");
+  }
+
+  for (const c of result.courses) {
+    lines.push(formatCourse(c));
+  }
+
+  // Overall
+  if (!courseFilter && result.overallPercent !== null) {
+    lines.push("\n" + "─".repeat(36));
+    lines.push(`📊 *Overall: ${result.overallPercent}%*`);
+  }
+
+  return lines.join("\n");
+}
+
+/*
+Fetch a report for one doc and send it, reacting with the outcome.
+
+Exported because !test drives exactly the same flow for another student's doc -
+it used to hold a near-identical copy of this function.
+*/
+export async function sendAttendanceReport(
+  docId: string,
+  chatId: string,
+  msg: WAMessage,
+  courseFilter?: string
+): Promise<void> {
+  const reply = (text: string) => queueReply(chatId, { text }, msg);
+
+  await reactNow(chatId, "⏳", msg.key);
+
+  try {
+    const result = await getAttendance(docId, { courseCode: courseFilter });
+
+    if (result === undefined) {
+      await reply(`Creds are not set. Please do \`${cmd("test")}\` for more info.`);
+      await reactNow(chatId, "❌", msg.key);
+      return;
+    }
+
+    await reply(formatAttendance(result, courseFilter));
+    await reactNow(chatId, result.ok && !result.no_record ? "✅" : "❌", msg.key);
+  } catch (err: any) {
+    console.error("attendance error:", err);
+    await reply(`❌ Unexpected error: ${err?.message ?? err}`);
+    await reactNow(chatId, "❌", msg.key);
+  }
+}
+
+export async function handleAttendance(_sock: WASocket, msg: WAMessage, _text: string, ctx: CommandContext) {
+  await sendAttendanceReport(ctx.userId, ctx.chatId, msg, ctx.match || undefined);
+}
+
+// Command definition
+const command: Command = {
+  name: "attendance",
+  aliases: ["att", "a"],
+  description: "Fetch your UTAR attendance report with course breakdown and progress bars",
+  usage: `${cmd("attendance")} [course_code]`,
+  requiresArgs: false,
+  handler: handleAttendance,
+};
+
+export default command;

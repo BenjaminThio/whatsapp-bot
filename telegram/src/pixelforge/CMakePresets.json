@@ -1,0 +1,34 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+    "configurePresets": [
+        {
+            "name": "main",
+            "displayName": "Main Build (Debug)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/main",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BUILD_TESTS": "OFF",
+                "BUILD_APP": "ON",
+                "ENABLE_WARNINGS": "ON"
+            }
+        },
+        {
+            "name": "tests",
+            "displayName": "Tests Build (Debug)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/tests",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "BUILD_TESTS": "ON",
+                "BUILD_APP": "OFF",
+                "ENABLE_WARNINGS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        { "name": "main", "configurePreset": "main" },
+        { "name": "tests", "configurePreset": "tests" }
+    ]
+}

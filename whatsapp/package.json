@@ -1,0 +1,23 @@
+{
+  "name": "whatsapp",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "description": "The WhatsApp half of Lasma. Runs on Baileys; core logic lives in @lasma/shared.",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@google/genai": "^2.5.0",
+    "@whiskeysockets/baileys": "^7.0.0-rc13",
+    "jszip": "^3.10.1",
+    "pino": "^10.3.1",
+    "yt-search": "^2.13.1"
+  },
+  "devDependencies": {
+    "@types/yt-search": "^2.10.3"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@lasma/shared",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Code and data shared by the WhatsApp (whatsapp) and Telegram (telegram) bots.",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "schema": "bun run db/apply-schema.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^2.5.0",
+    "firebase-admin": "^14.2.0",
+    "postgres": "^3.4.9",
+    "sharp": "^0.35.3",
+    "zxing-wasm": "^3.0.2"
+  }
+}

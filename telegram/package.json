@@ -1,0 +1,28 @@
+{
+  "name": "telegram",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "module": "src/local.ts",
+  "description": "The Telegram half of Lasma. Runs on grammY; core logic lives in @lasma/shared.",
+  "scripts": {
+    "dev": "bun --watch src/local.ts",
+    "start": "bun src/local.ts",
+    "typecheck": "tsc --noEmit",
+    "build:chess": "cd src/pixelforge && cmake-js compile --CDCMAKE_BUILD_TYPE=Release",
+    "migrate:firestore": "bun run scripts/migrate-firestore.ts"
+  },
+  "dependencies": {
+    "@google/genai": "^2.15.0",
+    "grammy": "^1.39.3",
+    "yt-search": "^2.13.1"
+  },
+  "devDependencies": {
+    "@octokit/webhooks-types": "^7.6.1",
+    "@vercel/node": "^5.5.33",
+    "cmake-js": "^8.0.0",
+    "firebase": "^12.9.0",
+    "node-addon-api": "^8.5.0",
+    "@types/yt-search": "^2.10.3"
+  }
+}

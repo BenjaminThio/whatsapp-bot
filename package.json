@@ -1,32 +1,27 @@
 {
-  "scripts": {
-    "dev": "bun --watch src/index.ts",
-    "build": "tsc",
-    "vercel-build": "bun run build"
-  },
-  "name": "whatsapp-bot",
-  "module": "index.ts",
-  "type": "module",
+  "name": "lasma",
   "private": true,
+  "type": "module",
+  "description": "Lasma - a WhatsApp bot and a Telegram bot over one shared core.",
+  "workspaces": [
+    "shared",
+    "whatsapp",
+    "telegram"
+  ],
+  "scripts": {
+    "whatsapp": "bun --filter whatsapp start",
+    "telegram": "bun --filter telegram start",
+    "dev:whatsapp": "bun --filter whatsapp dev",
+    "dev:telegram": "bun --filter telegram dev",
+    "schema": "bun run shared/db/apply-schema.ts",
+    "typecheck": "bun run typecheck:whatsapp && bun run typecheck:telegram",
+    "typecheck:whatsapp": "cd whatsapp && tsc --noEmit",
+    "typecheck:telegram": "cd telegram && tsc --noEmit",
+    "migrate:firestore": "cd telegram && bun run scripts/migrate-firestore.ts"
+  },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^25.6.0",
-    "@types/qrcode-terminal": "^0.12.2",
-    "@types/yt-search": "^2.10.3",
-    "tsx": "^4.21.0"
-  },
-  "peerDependencies": {
     "typescript": "^6.0.2"
-  },
-  "dependencies": {
-    "@google/genai": "^2.5.0",
-    "@whiskeysockets/baileys": "^7.0.0-rc13",
-    "firebase-admin": "^13.10.0",
-    "jszip": "^3.10.1",
-    "pino": "^10.3.1",
-    "postgres": "^3.4.9",
-    "qrcode-terminal": "^0.12.0",
-    "yt-search": "^2.13.1",
-    "zxing-wasm": "^3.0.2"
   }
 }

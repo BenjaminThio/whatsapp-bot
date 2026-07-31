@@ -1,31 +1,68 @@
-# Dependencies
+# ── Dependencies ─────────────────────────────────────────────────────────────
+# One hoisted tree at the workspace root.
 node_modules/
+
+# ── Python ───────────────────────────────────────────────────────────────────
+# One venv at the workspace root, shared by both bots.
 .venv/
 __pycache__/
 *.pyc
 
-# Secrets & credentials
+# ── Secrets ──────────────────────────────────────────────────────────────────
 .env
-firebase-key.json
+.env.local
+.env.*.local
+
+# hi-hive credentials: student ids, session tokens, fcm tokens, AES material.
+# shared/hi-hive/creds.json and shared/hi-hive/legacy/creds.json are BOTH real.
+creds.json
+
 serviceAccountKey.json
-auth_info_baileys/
+firebase-key.json
 *.session
 
-# Compiled binaries (rebuild on each platform)
+# WhatsApp session state - re-pairing is required if this is lost, and it is
+# equivalent to a logged-in device.
+whatsapp/auth_info_baileys/
+
+# ── Build output ─────────────────────────────────────────────────────────────
+dist/
+out/
+*.tsbuildinfo
+*.tgz
+telegram/src/pixelforge/build/
+
+# Compiled binaries. Every one of these is platform-specific and is rebuilt
+# from source on each host - see SETUP-TERMUX.md.
 *.exe
-src/modules/*.exe
-dict/*.exe
-dict/dict_lookup
-dict/dict_indexer
+*.node
+shared/assets/dict/dict_lookup
+shared/assets/dict/dict_indexer
 
-# Huge data files (see note below)
-dict/*.dat
-dict/*.idx
-dict/enwiktionary-*.xml
+# ── Large assets ─────────────────────────────────────────────────────────────
+# The dict index is ~680 MB and the emoji dataset 60 MB. Copy them in from a
+# backup, or rebuild the index with shared/assets/dict/src/dict_indexer.c.
+shared/assets/dict/dict.dat
+shared/assets/dict/dict.idx
+shared/assets/data/emoji.jsonl
 
-# OS / editor junk
+# The raw Wiktionary dump - 11 GB, and only ever an input to the indexer.
+enwiktionary-*.xml
+
+# Generated on first use, rebuilt whenever the dataset changes.
+shared/assets/data/emoji.index.json
+
+# ── Logs / caches / coverage ─────────────────────────────────────────────────
+*.log
+logs/
+report.[0-9]*.json
+coverage/
+*.lcov
+.cache/
+.eslintcache
+
+# ── Editor / OS ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
 .DS_Store
 Thumbs.db
-*.log
-
-creds.json
