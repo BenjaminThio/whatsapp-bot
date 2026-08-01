@@ -68,13 +68,32 @@ psql_run() { PGCONNECT_TIMEOUT=10 psql -w -h "$PGHOST" -p "$PGPORT" -U "$PGUSER"
 
 echo "${bold}Restore into $PGDATABASE${off}"
 
-[ -f "$DUMP" ] || die "no dump at $DUMP"
+[ -e "$DUMP" ] || die "no dump at $DUMP"
+
+# Existing and readable are different things on Android. Without the storage
+# permission /sdcard entries stat fine but every read fails, and an unchecked
+# `wc -c` then yields an empty string that turns the size arithmetic into a
+# syntax error instead of a useful message.
+if [ ! -r "$DUMP" ]; then
+    # die() exits, so everything worth saying has to come first
+    warn "cannot read $DUMP - permission denied"
+    echo "      Termux needs Android's storage permission for /sdcard. Run:"
+    echo "        termux-setup-storage"
+    echo "      and accept the dialog, then try again. If it still fails, use"
+    echo "      the path Termux manages itself:"
+    echo "        $(basename "$0") ~/storage/shared/lasma-backup/$(basename "$DUMP")"
+    die "unreadable dump"
+fi
 
 # ── Look before leaping ───────────────────────────────────────────────────────
 
-size=$(( $(wc -c < "$DUMP") / 1024 ))
+bytes=$(wc -c < "$DUMP" 2>/dev/null) || bytes=0
+: "${bytes:=0}"
+size=$(( bytes / 1024 ))
 rows=$(grep -c "^COPY\|^INSERT INTO" "$DUMP" 2>/dev/null) || rows=0
 tables=$(grep -c "^CREATE TABLE" "$DUMP" 2>/dev/null) || tables=0
+
+[ "$bytes" -gt 0 ] || die "$DUMP is empty"
 
 note "dump:    $DUMP"
 note "size:    ${size} KB"
