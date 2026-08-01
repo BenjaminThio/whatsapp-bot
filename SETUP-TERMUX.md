@@ -31,19 +31,19 @@ mkdir -p /sdcard/lasma-backup
 pg_dump -h 127.0.0.1 -U postgres lasma_bot > /sdcard/lasma-backup/lasma.sql
 
 # WhatsApp pairing state. Without it you re-scan the QR from the phone.
-cp -r ~/bots/lasma-bot/whatsapp/auth_info_baileys /sdcard/lasma-backup/
+cp -r ~/lasma-bot/whatsapp/auth_info_baileys /sdcard/lasma-backup/
 
 # Secrets
-cp ~/bots/lasma-bot/shared/.env               /sdcard/lasma-backup/shared.env
-cp ~/bots/lasma-bot/telegram/.env             /sdcard/lasma-backup/telegram.env
-cp ~/bots/lasma-bot/shared/hi-hive/creds.json /sdcard/lasma-backup/
-cp ~/bots/lasma-bot/shared/hi-hive/legacy/creds.json /sdcard/lasma-backup/legacy-creds.json
-cp ~/bots/lasma-bot/whatsapp/serviceAccountKey.json  /sdcard/lasma-backup/
+cp ~/lasma-bot/shared/.env               /sdcard/lasma-backup/shared.env
+cp ~/lasma-bot/telegram/.env             /sdcard/lasma-backup/telegram.env
+cp ~/lasma-bot/shared/hi-hive/creds.json /sdcard/lasma-backup/
+cp ~/lasma-bot/shared/hi-hive/legacy/creds.json /sdcard/lasma-backup/legacy-creds.json
+cp ~/lasma-bot/whatsapp/serviceAccountKey.json  /sdcard/lasma-backup/
 
 # Large assets - 740 MB total, and the dict takes hours to rebuild
-cp ~/bots/lasma-bot/shared/assets/data/emoji.jsonl /sdcard/lasma-backup/
-cp ~/bots/lasma-bot/shared/assets/dict/dict.dat    /sdcard/lasma-backup/
-cp ~/bots/lasma-bot/shared/assets/dict/dict.idx    /sdcard/lasma-backup/
+cp ~/lasma-bot/shared/assets/data/emoji.jsonl /sdcard/lasma-backup/
+cp ~/lasma-bot/shared/assets/dict/dict.dat    /sdcard/lasma-backup/
+cp ~/lasma-bot/shared/assets/dict/dict.idx    /sdcard/lasma-backup/
 ```
 
 Copy `/sdcard/lasma-backup` to a computer as well. `/sdcard` survives a Termux
@@ -67,14 +67,14 @@ pkg update -y && pkg install -y proot-distro git tmux postgresql && termux-setup
 **2. Install Ubuntu and clone the project into it:**
 
 ```bash
-proot-distro install ubuntu && proot-distro login ubuntu -- bash -c 'mkdir -p ~/bots && cd ~/bots && git clone <your-repo-url> lasma-bot'
+proot-distro install ubuntu && proot-distro login ubuntu -- bash -c 'cd ~ && git clone <your-repo-url> lasma-bot'
 ```
 
 **3. Back at the Termux prompt, start the database** - it runs here, natively,
 not in the proot:
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-postgres.sh
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-postgres.sh
 ```
 
 It installs Postgres if needed, initialises a UTF-8 cluster, starts it, creates
@@ -88,7 +88,7 @@ proot-distro login ubuntu
 ```
 
 ```bash
-cd ~/bots/lasma-bot && bash scripts/setup.sh
+cd ~/lasma-bot && bash scripts/setup.sh
 ```
 
 `setup.sh` does the other eleven steps: packages, locale, Bun, the database
@@ -122,7 +122,7 @@ exit
 ```
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-install.sh && source ~/.bashrc
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-install.sh && source ~/.bashrc
 ```
 
 Then `w` starts the WhatsApp bot and `t` the Telegram one, from the Termux
@@ -131,7 +131,7 @@ prompt. Both start the database first if it is down.
 ### Secrets, without nano
 
 ```bash
-bash ~/bots/lasma-bot/scripts/configure-env.sh
+bash ~/lasma-bot/scripts/configure-env.sh
 ```
 
 It walks every key both bots read, one prompt at a time, with a description of
@@ -247,7 +247,7 @@ The code is plain ESM TypeScript.
 proot at all - see the note at the top.
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-postgres.sh
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-postgres.sh
 ```
 
 That does all of the following, and is safe to re-run:
@@ -297,7 +297,7 @@ termux-postgres.sh --trust
 ## 6. The project
 
 ```bash
-mkdir -p ~/bots && cd ~/bots
+cd ~
 git clone <your-repo-url> lasma-bot
 cd lasma-bot
 bun install
@@ -311,7 +311,7 @@ hoisted `node_modules`. Do not run it inside `telegram/` or `whatsapp/`.
 One venv at the workspace root, shared by both bots.
 
 ```bash
-cd ~/bots/lasma-bot
+cd ~/lasma-bot
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
@@ -324,7 +324,7 @@ reinstall. Only `/removebg` stops working; every other engine is fine.
 ## 8. Restore the backup
 
 ```bash
-cd ~/bots/lasma-bot
+cd ~/lasma-bot
 
 cp /sdcard/lasma-backup/shared.env   shared/.env
 cp /sdcard/lasma-backup/telegram.env telegram/.env
@@ -380,7 +380,7 @@ psql -h 127.0.0.1 -U postgres -d lasma_bot < /sdcard/lasma-backup/lasma.sql
 For a fresh database instead:
 
 ```bash
-cd ~/bots/lasma-bot
+cd ~/lasma-bot
 bun run schema
 ```
 
@@ -392,7 +392,7 @@ so this is only needed to set the machine up before the first run.
 The C sources are in the repo; the binaries are platform-specific and are not.
 
 ```bash
-cd ~/bots/lasma-bot/shared/assets/dict/src
+cd ~/lasma-bot/shared/assets/dict/src
 gcc -O2 -o ../dict_lookup  dict_lookup.c
 gcc -O2 -o ../dict_indexer dict_indexer.c
 ```
@@ -400,7 +400,7 @@ gcc -O2 -o ../dict_indexer dict_indexer.c
 Check it against the data you restored:
 
 ```bash
-cd ~/bots/lasma-bot
+cd ~/lasma-bot
 DICT_DIR=$PWD/shared/assets/dict ./shared/assets/dict/dict_lookup water | head -5
 ```
 
@@ -467,7 +467,7 @@ seconds, once.
 ## 11. The chess renderer (optional)
 
 ```bash
-cd ~/bots/lasma-bot/telegram
+cd ~/lasma-bot/telegram
 bun run build:chess
 ```
 
@@ -482,7 +482,7 @@ Install them **from Termux**, not from inside Ubuntu, so you can start a bot
 without logging into the proot first:
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-install.sh
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-install.sh
 source ~/.bashrc
 ```
 
@@ -504,7 +504,7 @@ Inside Ubuntu the same commands are available, and manage the same bots, if you
 install them there too:
 
 ```bash
-bash ~/bots/lasma-bot/scripts/lasma.sh install && source ~/.bashrc
+bash ~/lasma-bot/scripts/lasma.sh install && source ~/.bashrc
 ```
 
 `lasma.sh` detects which side it is on and does the right thing either way.
@@ -551,7 +551,7 @@ of supervising helps because the supervisor gets killed too.
 **Without the shortcuts**, or to run in the foreground while editing code:
 
 ```bash
-cd ~/bots/lasma-bot
+cd ~/lasma-bot
 bun run whatsapp        # no watcher
 bun run dev:whatsapp    # restarts on save
 ```
@@ -561,7 +561,7 @@ bun run dev:whatsapp    # restarts on save
 ## Checklist
 
 ```bash
-cd ~/bots/lasma-bot
+cd ~/lasma-bot
 
 pg_isready                                   # database up
 bun run schema                               # tables present

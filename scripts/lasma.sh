@@ -30,7 +30,7 @@ if [ -d /data/data/com.termux/files/usr ]; then
     # Same tree seen from inside the proot: drop the rootfs prefix
     case "$ROOT" in
         "$ROOTFS"*) UROOT="${ROOT#"$ROOTFS"}" ;;
-        *)          UROOT="${LASMA_DIR:-/root/bots/lasma-bot}" ;;
+        *)          UROOT="${LASMA_DIR:-/root/lasma-bot}" ;;
     esac
 else
     IN_TERMUX=0

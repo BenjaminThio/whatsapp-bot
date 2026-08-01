@@ -191,7 +191,9 @@ pg_ctl -D "$PGDATA" reload >/dev/null 2>&1
 
 # ── Tell the bots where it is ─────────────────────────────────────────────────
 
-ENVFILE="$ROOTFS/root/bots/lasma-bot/shared/.env"
+# Derived from where this script lives, not hardcoded, so moving the checkout
+# does not need a code change. This file sits at <project>/scripts/.
+ENVFILE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/shared/.env"
 if [ -f "$ENVFILE" ]; then
     cp "$ENVFILE" "$ENVFILE.bak"
     for kv in "PGHOST=127.0.0.1" "PGPORT=$DB_PORT" "PGUSER=$DB_USER" "PGDATABASE=$DB_NAME"; do
@@ -218,4 +220,4 @@ ok "reachable at 127.0.0.1:$DB_PORT from Termux and from inside the proot"
 echo
 echo "Next, inside Ubuntu:"
 echo "  proot-distro login $DISTRO"
-echo "  cd ~/bots/lasma-bot && bash scripts/setup.sh"
+echo "  cd ~/lasma-bot && bash scripts/setup.sh"

@@ -123,7 +123,7 @@ step_3_postgres() {
     if ! db_up; then
         die "no Postgres at $PGHOST:$PGPORT"
         echo "      The database runs in Termux, not in here. Exit to Termux and run:"
-        echo "        bash \$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu\$HOME/bots/lasma-bot/scripts/termux-postgres.sh"
+        echo "        bash \$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu$ROOT/scripts/termux-postgres.sh"
         echo "      then come back and re-run:  bash scripts/setup.sh --from 3"
         return
     fi

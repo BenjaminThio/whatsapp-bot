@@ -7,7 +7,7 @@
 # logging into the proot first. The tmux server lives in Termux and each
 # session enters Ubuntu on its own, so the bots survive Ubuntu logouts.
 #
-#   bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-install.sh
+#   bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-install.sh
 
 set -uo pipefail
 
