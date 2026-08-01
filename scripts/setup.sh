@@ -110,21 +110,48 @@ step_1_packages() {
 }
 
 step_2_bun() {
-    if have bun; then skip "bun $(bun --version) at $(command -v bun)"; return; fi
+    if have bun; then
+        skip "bun $(bun --version) at $(command -v bun)"
+        link_bun
+        return
+    fi
 
     curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1
     export PATH="${BUN_INSTALL:-$HOME/.bun}/bin:$PATH"
 
     if have bun; then
         ok "bun $(bun --version)"
-        # ~/.bashrc is not read by the non-interactive shells the bots run in,
-        # so also record it where a login shell will pick it up
-        if ! grep -q "\.bun/bin" "$HOME/.profile" 2>/dev/null; then
-            echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.profile"
-            ok "added bun to ~/.profile"
-        fi
     else
         die "bun install failed - install nodejs instead and use node/npx"
+        return
+    fi
+
+    link_bun
+}
+
+# Put bun somewhere every shell can find it.
+#
+# Bun's installer only appends a PATH line to ~/.bashrc, which Ubuntu skips
+# entirely for non-interactive shells - and the bots are launched as
+# `proot-distro login ubuntu -- bash supervise.sh`, which is neither
+# interactive nor a login shell. The result is a bun that works when you type
+# it and vanishes when anything scripts it.
+#
+# /usr/local/bin is on the default PATH for every shell, so a symlink there
+# removes the dependency on shell profiles instead of working around it.
+link_bun() {
+    local real
+    real=$(command -v bun) || return 0
+    case "$real" in /usr/local/bin/*) return 0 ;; esac
+
+    if ln -sf "$real" /usr/local/bin/bun 2>/dev/null; then
+        ln -sf "$real" /usr/local/bin/bunx 2>/dev/null
+        ok "linked bun into /usr/local/bin so every shell finds it"
+    fi
+
+    if ! grep -q "\.bun/bin" "$HOME/.profile" 2>/dev/null; then
+        echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.profile"
+        ok "added bun to ~/.profile"
     fi
 }
 

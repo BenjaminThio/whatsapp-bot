@@ -56,43 +56,38 @@ You need roughly **3 GB free** for the finished install: 740 MB of assets,
 
 ## The fast path
 
-Five commands. Each is explained in the manual steps below.
+This is the sequence as actually run on a phone, not a guess. Each block says
+which prompt it belongs at - that distinction matters more than anything else
+here.
 
-Several commands below need the Ubuntu filesystem's path as Termux sees it.
-proot-distro changed where that lives between versions, so resolve it once and
-reuse it - add this to `~/.bashrc` in Termux if you like:
-
-```bash
-export UB=$(ls -d $PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu 2>/dev/null | head -1); echo "$UB"
-```
-
-That should print a path ending in `ubuntu/rootfs` or `installed-rootfs/ubuntu`.
-If it prints nothing, Ubuntu is not installed yet.
-
-**1. In Termux**, after reinstalling it:
+### Termux
 
 ```bash
 pkg update -y && pkg install -y proot-distro git tmux postgresql && termux-setup-storage
 ```
 
-**2. Install Ubuntu and clone the project into it:**
-
 ```bash
 proot-distro install ubuntu && proot-distro login ubuntu -- bash -c 'cd ~ && git clone <your-repo-url> lasma-bot'
 ```
 
-**3. Back at the Termux prompt, start the database** - it runs here, natively,
-not in the proot:
+Resolve the Ubuntu filesystem path once - proot-distro moved it between
+versions, so do not hardcode it:
+
+```bash
+export UB=$(ls -d $PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu 2>/dev/null | head -1); echo "$UB"
+```
+
+Start the database. It runs **here in Termux**, natively - it cannot run in the
+proot at all:
 
 ```bash
 bash $UB/root/lasma-bot/scripts/termux-postgres.sh
 ```
 
-It installs Postgres if needed, initialises a UTF-8 cluster, starts it, creates
-the role and database, and asks you for a password to set on the role. Note
-that password down - `setup.sh` asks for it again in the next step.
+It asks for a password for the `postgres` role. Write it down; the next step
+asks again.
 
-**4. Inside Ubuntu, run the installer:**
+### Ubuntu
 
 ```bash
 proot-distro login ubuntu
@@ -102,42 +97,52 @@ proot-distro login ubuntu
 cd ~/lasma-bot && bash scripts/setup.sh
 ```
 
-`setup.sh` does the other eleven steps: packages, locale, Bun, the database
-connection check, dependencies, the venv, the backup restore, the schema, the
-dict index, the emoji dataset, the chess addon, then a verification pass. If
-`shared/.env` is missing and there is no backup it stops and asks you for each
-secret, so have your keys to hand.
+Twelve steps: packages, locale, Bun, the database connection, dependencies, the
+venv, backup restore, schema, dict index, emoji dataset, chess addon, verify. It
+asks for your secrets if `shared/.env` is missing and no backup supplied it.
 
-One thing it may do that takes real time and data, and only when the file is
-missing and no backup supplied it: building the Wiktionary index - ~1.2 GB
-downloaded, ~11 GB temporary, hours of indexing, all cleaned up afterwards.
-Skip it with `--skip-dict`.
-
-Every step checks whether it is already done, so it is safe to re-run. If
-something fails it says which step, and you fix it and re-run just that one:
-
-```bash
-bash scripts/setup.sh --only 3
-```
-
-```bash
-bash scripts/setup.sh --list      # what the steps are
-bash scripts/setup.sh --from 6    # resume from step 6
-```
-
-**5. Back in Termux**, install the shortcuts so you never have to log into
-Ubuntu by hand again:
+Safe to re-run. On failure it names the step, and you re-run just that one with
+`--only <n>`.
 
 ```bash
 exit
 ```
 
+### Termux again
+
 ```bash
 bash $UB/root/lasma-bot/scripts/termux-install.sh && source ~/.bashrc
 ```
 
-Then `w` starts the WhatsApp bot and `t` the Telegram one, from the Termux
-prompt. Both start the database first if it is down.
+```bash
+w
+```
+
+`w` is the WhatsApp bot, `t` is Telegram. Detach with Ctrl-B then D.
+
+### Things that will confuse you otherwise
+
+**`w` and `t` belong at the Termux prompt, not inside Ubuntu.** Inside Ubuntu,
+`w` is the stock procps utility that lists logged-in users - you will get a load
+average instead of a bot. That is the design working: tmux runs in Termux and
+each session enters the proot itself, so the bots survive logging out of Ubuntu.
+
+**After pulling script changes, restart the supervisor.** A running bash script
+does not reload when the file changes:
+
+```bash
+w stop && w
+```
+
+**To update the project from Termux** without logging in:
+
+```bash
+proot-distro login ubuntu -- bash -c 'cd ~/lasma-bot && git pull'
+```
+
+**Acquire the Termux wakelock** from its notification, and exclude Termux from
+Android battery optimisation. Without it Android kills both bots minutes after
+the screen sleeps, supervisor included, and nothing else you do matters.
 
 ### Secrets, without nano
 
