@@ -141,18 +141,41 @@ step_3_postgres() {
         return
     fi
 
-    if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
-        mkdir -p /var/lib/postgresql/data /var/run/postgresql
+    local data=/var/lib/postgresql/data
+
+    # pg_control is written near the END of initdb, so it is the honest test for
+    # "finished". PG_VERSION appears early: a cluster interrupted partway
+    # through has it and is still unusable, which previously read as
+    # "cluster exists" and then failed to start with a confusing error.
+    if [ -s "$data/global/pg_control" ]; then
+        skip "cluster exists"
+    elif [ -e "$data/PG_VERSION" ] || [ -d "$data/base" ]; then
+        if [ "$REINIT_DB" -eq 1 ]; then
+            warn "removing the unfinished cluster at $data (--reinit-db)"
+            rm -rf "$data"
+        else
+            die "there is a half-initialised cluster at $data - initdb did not finish"
+            echo "      It has no usable database in it. To clear it and start over:"
+            echo "        pkill -f postgres; rm -rf $data"
+            echo "        bash scripts/setup.sh --only 3"
+            echo "      Or re-run with:  bash scripts/setup.sh --only 3 --reinit-db"
+            return
+        fi
+    fi
+
+    if [ ! -s "$data/global/pg_control" ]; then
+        rm -f /var/run/postgresql/.s.PGSQL.* "$data/postmaster.pid" 2>/dev/null
+        mkdir -p "$data" /var/run/postgresql
         chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
         chmod 775 /var/run/postgresql
-        note_plain "running initdb - a minute or two on a phone"
+        note_plain "running initdb - a minute or two on a phone, let it finish"
         # Output is NOT suppressed: initdb is slow enough that silence is
         # indistinguishable from a hang, and its errors are the useful ones
-        as_postgres "$(pg_bin)/initdb -D /var/lib/postgresql/data" \
+        as_postgres "$(pg_bin)/initdb -D $data" \
             || { die "initdb failed - see above, usually the locale from step 1"; return; }
+        [ -s "$data/global/pg_control" ] \
+            || { die "initdb exited cleanly but produced no pg_control"; return; }
         ok "cluster initialised"
-    else
-        skip "cluster exists"
     fi
 
     start_postgres || { die "postgres will not start"; return; }
@@ -387,7 +410,7 @@ step_12_verify() {
     [ -d whatsapp/auth_info_baileys ] && ok "whatsapp pairing" || warn "whatsapp will show a QR on first start"
 }
 
-FROM=1; TO=${#STEP_NAMES[@]}; SKIP_DICT=0; SKIP_EMOJI=0
+FROM=1; TO=${#STEP_NAMES[@]}; SKIP_DICT=0; SKIP_EMOJI=0; REINIT_DB=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -395,6 +418,7 @@ while [ $# -gt 0 ]; do
         --from) FROM=${2:-1}; shift ;;
         --only) FROM=${2:-1}; TO=${2:-1}; shift ;;
         --skip-dict) SKIP_DICT=1 ;;
+        --reinit-db) REINIT_DB=1 ;;
         --skip-emoji) SKIP_EMOJI=1 ;;
         --skip-assets) SKIP_DICT=1; SKIP_EMOJI=1 ;;
         --help|-h) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
