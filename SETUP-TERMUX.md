@@ -394,26 +394,24 @@ half-finished build cannot fill the phone. The XML is only deleted once
 `dict_lookup water` has returned a real definition; if verification fails the
 XML is kept so you can retry the indexing without downloading again.
 
-**No `emoji.jsonl`?** Also handled, by step 10. It scrapes Emojipedia using
-`shared/assets/data/emoji-src/scrape_emoji.py`, seeded from the `raw_emoji.json`
-that ships with the repo.
+**`emoji.jsonl` now ships in the repo**, so a clone already has it and step 10
+does nothing. If you ever need to regenerate it:
 
 ```bash
-bash scripts/build-emoji.sh                # full, with design history
-bash scripts/build-emoji.sh --no-designs   # ~2 MB instead of ~60 MB, far faster
 bash scripts/build-emoji.sh --verify       # check what you have
 bash scripts/build-emoji.sh --repair       # re-scrape incomplete entries
+bash scripts/build-emoji.sh --force        # from scratch, with design history
+bash scripts/build-emoji.sh --no-designs   # ~2 MB instead of ~60 MB, far faster
 ```
 
 The design history is what costs: a real browser over 5,225 pages, many hours.
-`--no-designs` is plain HTTP and needs no browser, at the cost of `/emoji` not
-showing the per-platform artwork timeline. On ARM, Playwright often has no
-Chromium build at all - `setup.sh` notices and falls back to `--no-designs`
-rather than leaving you with nothing.
+On ARM, Playwright often has no Chromium build at all, so `setup.sh` falls back
+to `--no-designs` rather than leaving you with nothing. It resumes
+automatically, and re-running never duplicates an entry.
 
-It resumes automatically: whatever is already in the file is skipped, so an
-interrupted run continues and re-running never duplicates an entry. Skip it
-with `--skip-emoji`, or skip both large assets with `--skip-assets`.
+`emoji.index.json` is a cache keyed on the dataset's size and mtime. Git does
+not preserve mtimes, so a fresh clone always rebuilds it on first use - a few
+seconds, once.
 
 ## 11. The chess renderer (optional)
 

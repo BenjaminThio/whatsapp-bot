@@ -43,6 +43,7 @@ ok()   { echo "  ${grn}ok${off}  $*"; }
 skip() { echo "  ${ylw}--${off}  $* (already done)"; }
 warn() { echo "  ${ylw}!!${off}  $*"; }
 die()  { echo "  ${red}xx${off}  $*"; FAILED+=("$*"); }
+note_plain() { echo "  --  $*"; }
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
@@ -55,11 +56,37 @@ env_get() {
 
 pg_bin() { echo /usr/lib/postgresql/*/bin; }
 
+# Run something as the postgres user.
+#
+# `su postgres -c ...` asks for a password when the caller is not root, and it
+# writes that prompt to the terminal while reading stdin - so with output
+# redirected it looks like a hang rather than a question. runuser never
+# authenticates when called as root, so prefer it and refuse outright when we
+# are not root instead of blocking on an invisible prompt.
+as_postgres() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "not root" >&2
+        return 97
+    fi
+    if have runuser; then
+        runuser -u postgres -- bash -c "$1"
+    else
+        su -s /bin/bash postgres -c "$1"
+    fi
+}
+
+# -w so psql fails instead of prompting, and a connect timeout so a wedged
+# server cannot stall the whole run
+psql_as_postgres() { as_postgres "PGCONNECT_TIMEOUT=10 psql -w $1"; }
+
 start_postgres() {
     pg_isready -q 2>/dev/null && return 0
-    su postgres -c "$(pg_bin)/pg_ctl -D /var/lib/postgresql/data -l /var/lib/postgresql/log start" \
-        >/dev/null 2>&1
+    as_postgres "$(pg_bin)/pg_ctl -D /var/lib/postgresql/data -l /var/lib/postgresql/log start" \
+        >/tmp/lasma-pgstart.log 2>&1
     for _ in $(seq 1 20); do pg_isready -q 2>/dev/null && return 0; sleep 1; done
+    warn "pg_ctl output:"
+    sed 's/^/      /' /tmp/lasma-pgstart.log 2>/dev/null | head -20
+    [ -f /var/lib/postgresql/log ] && { warn "server log tail:"; tail -15 /var/lib/postgresql/log | sed 's/^/      /'; }
     return 1
 }
 
@@ -98,18 +125,31 @@ step_2_bun() {
 
 step_3_postgres() {
     local user pass db
-    user=$(env_get PGUSER || echo lasma)
+    user=$(env_get PGUSER || echo postgres)
     pass=$(env_get PGPASSWORD || echo)
     db=$(env_get PGDATABASE || echo lasma_bot)
-    [ -z "$user" ] && user=lasma
+    [ -z "$user" ] && user=postgres
     [ -z "$db" ] && db=lasma_bot
+
+    if [ "$(id -u)" -ne 0 ]; then
+        die "step 3 needs root. Inside the proot you normally are - run 'proot-distro login ubuntu' rather than su'ing to another user first."
+        return
+    fi
+
+    if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+        die "postgres is not installed - re-run step 1"
+        return
+    fi
 
     if [ ! -s /var/lib/postgresql/data/PG_VERSION ]; then
         mkdir -p /var/lib/postgresql/data /var/run/postgresql
         chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
         chmod 775 /var/run/postgresql
-        su postgres -c "$(pg_bin)/initdb -D /var/lib/postgresql/data" >/dev/null 2>&1 \
-            || { die "initdb failed - check the locale from step 1"; return; }
+        note_plain "running initdb - a minute or two on a phone"
+        # Output is NOT suppressed: initdb is slow enough that silence is
+        # indistinguishable from a hang, and its errors are the useful ones
+        as_postgres "$(pg_bin)/initdb -D /var/lib/postgresql/data" \
+            || { die "initdb failed - see above, usually the locale from step 1"; return; }
         ok "cluster initialised"
     else
         skip "cluster exists"
@@ -119,22 +159,22 @@ step_3_postgres() {
     ok "server up"
 
     if [ -z "$pass" ]; then
-        warn "no PGPASSWORD in shared/.env - run step 4 then re-run step 3"
+        warn "no PGPASSWORD in shared/.env - run step 4, then: bash scripts/setup.sh --only 3"
         return
     fi
 
-    if su postgres -c "psql -tAc \"SELECT 1 FROM pg_roles WHERE rolname='$user'\"" 2>/dev/null | grep -q 1; then
-        su postgres -c "psql -c \"ALTER USER $user WITH PASSWORD '$pass';\"" >/dev/null 2>&1
+    if psql_as_postgres "-tAc \"SELECT 1 FROM pg_roles WHERE rolname='$user'\"" 2>/dev/null | grep -q 1; then
+        psql_as_postgres "-c \"ALTER USER $user WITH PASSWORD '$pass';\"" >/dev/null 2>&1
         skip "role $user exists (password synced)"
     else
-        su postgres -c "psql -c \"CREATE USER $user WITH PASSWORD '$pass' SUPERUSER;\"" >/dev/null 2>&1 \
+        psql_as_postgres "-c \"CREATE USER $user WITH PASSWORD '$pass' SUPERUSER;\"" >/dev/null 2>&1 \
             && ok "role $user created" || die "could not create role $user"
     fi
 
-    if su postgres -c "psql -tAc \"SELECT 1 FROM pg_database WHERE datname='$db'\"" 2>/dev/null | grep -q 1; then
+    if psql_as_postgres "-tAc \"SELECT 1 FROM pg_database WHERE datname='$db'\"" 2>/dev/null | grep -q 1; then
         skip "database $db exists"
     else
-        su postgres -c "psql -c 'CREATE DATABASE $db OWNER $user;'" >/dev/null 2>&1 \
+        psql_as_postgres "-c 'CREATE DATABASE $db OWNER $user;'" >/dev/null 2>&1 \
             && ok "database $db created" || die "could not create database $db"
     fi
 }
