@@ -26,7 +26,18 @@ if [ -d /data/data/com.termux/files/usr ]; then
     IN_TERMUX=1
     PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
     DISTRO="${LASMA_DISTRO:-ubuntu}"
-    ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+    # proot-distro moved the rootfs at some point: newer versions keep it under
+    # containers/<distro>/rootfs, older ones under installed-rootfs/<distro>.
+    # Detect rather than assume, and fall back to the newer layout for messages.
+    find_rootfs() {
+        local d
+        for d in "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"              "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"; do
+            [ -d "$d" ] && { echo "$d"; return 0; }
+        done
+        echo "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"
+        return 1
+    }
+    ROOTFS=$(find_rootfs)
     # Same tree seen from inside the proot: drop the rootfs prefix
     case "$ROOT" in
         "$ROOTFS"*) UROOT="${ROOT#"$ROOTFS"}" ;;

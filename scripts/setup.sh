@@ -123,7 +123,9 @@ step_3_postgres() {
     if ! db_up; then
         die "no Postgres at $PGHOST:$PGPORT"
         echo "      The database runs in Termux, not in here. Exit to Termux and run:"
-        echo "        bash \$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu$ROOT/scripts/termux-postgres.sh"
+        echo "        UB=\$(ls -d \$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs \\"
+        echo "                 \$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu 2>/dev/null | head -1)"
+        echo "        bash \$UB$ROOT/scripts/termux-postgres.sh"
         echo "      then come back and re-run:  bash scripts/setup.sh --from 3"
         return
     fi
@@ -243,7 +245,8 @@ step_8_schema() {
     db_up || { die "postgres unreachable - see step 3"; return; }
 
     local count
-    count=$(db_psql -d "$PGDATABASE" -tAc         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"         2>/dev/null | tr -d ' ')
+    count=$(db_psql -d "$PGDATABASE" -tAc         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"         2>/dev/null | tr -d ' 
+')
 
     if [ "${count:-0}" -gt 0 ]; then
         skip "$count table(s) already present"
@@ -359,7 +362,8 @@ step_12_verify() {
     if db_up; then
         ok "postgres reachable at $PGHOST:$PGPORT"
         local enc
-        enc=$(db_psql -d "$PGDATABASE" -tAc             "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='$PGDATABASE'"             2>/dev/null | tr -d ' ')
+        enc=$(db_psql -d "$PGDATABASE" -tAc             "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='$PGDATABASE'"             2>/dev/null | tr -d ' 
+')
         [ "$enc" = "UTF8" ] && ok "encoding UTF8"             || warn "encoding is ${enc:-unknown}, expected UTF8"
     else
         die "postgres unreachable - start it in Termux: termux-postgres.sh start"
@@ -417,7 +421,9 @@ Start the bots from inside Ubuntu:
 Or, to run w and t straight from Termux without logging in first, exit to
 Termux and run:
 
-  bash \$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu$ROOT/scripts/termux-install.sh
+  UB=\$(ls -d \$PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs \
+           \$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu 2>/dev/null | head -1)
+  bash \$UB$ROOT/scripts/termux-install.sh
 EOF
 else
     echo "${red}${bold}Finished with ${#FAILED[@]} problem(s):${off}"

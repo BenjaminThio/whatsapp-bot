@@ -7,7 +7,10 @@
 # logging into the proot first. The tmux server lives in Termux and each
 # session enters Ubuntu on its own, so the bots survive Ubuntu logouts.
 #
-#   bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-install.sh
+#   bash <ubuntu-rootfs>/root/lasma-bot/scripts/termux-install.sh
+#
+# The rootfs path differs by proot-distro version; find it with:
+#   ls -d $PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs \n#         $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu 2>/dev/null | head -1
 
 set -uo pipefail
 
@@ -19,7 +22,18 @@ fi
 
 PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 DISTRO="${LASMA_DISTRO:-ubuntu}"
-ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+# proot-distro moved the rootfs at some point: newer versions keep it under
+# containers/<distro>/rootfs, older ones under installed-rootfs/<distro>.
+# Detect rather than assume, and fall back to the newer layout for messages.
+find_rootfs() {
+    local d
+    for d in "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"              "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"; do
+        [ -d "$d" ] && { echo "$d"; return 0; }
+    done
+    echo "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"
+    return 1
+}
+ROOTFS=$(find_rootfs)
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"

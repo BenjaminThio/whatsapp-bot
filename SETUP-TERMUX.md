@@ -58,6 +58,17 @@ You need roughly **3 GB free** for the finished install: 740 MB of assets,
 
 Five commands. Each is explained in the manual steps below.
 
+Several commands below need the Ubuntu filesystem's path as Termux sees it.
+proot-distro changed where that lives between versions, so resolve it once and
+reuse it - add this to `~/.bashrc` in Termux if you like:
+
+```bash
+export UB=$(ls -d $PREFIX/var/lib/proot-distro/containers/ubuntu/rootfs $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu 2>/dev/null | head -1); echo "$UB"
+```
+
+That should print a path ending in `ubuntu/rootfs` or `installed-rootfs/ubuntu`.
+If it prints nothing, Ubuntu is not installed yet.
+
 **1. In Termux**, after reinstalling it:
 
 ```bash
@@ -74,7 +85,7 @@ proot-distro install ubuntu && proot-distro login ubuntu -- bash -c 'cd ~ && git
 not in the proot:
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-postgres.sh
+bash $UB/root/lasma-bot/scripts/termux-postgres.sh
 ```
 
 It installs Postgres if needed, initialises a UTF-8 cluster, starts it, creates
@@ -122,7 +133,7 @@ exit
 ```
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-install.sh && source ~/.bashrc
+bash $UB/root/lasma-bot/scripts/termux-install.sh && source ~/.bashrc
 ```
 
 Then `w` starts the WhatsApp bot and `t` the Telegram one, from the Termux
@@ -247,7 +258,7 @@ The code is plain ESM TypeScript.
 proot at all - see the note at the top.
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-postgres.sh
+bash $UB/root/lasma-bot/scripts/termux-postgres.sh
 ```
 
 That does all of the following, and is safe to re-run:
@@ -482,7 +493,7 @@ Install them **from Termux**, not from inside Ubuntu, so you can start a bot
 without logging into the proot first:
 
 ```bash
-bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/lasma-bot/scripts/termux-install.sh
+bash $UB/root/lasma-bot/scripts/termux-install.sh
 source ~/.bashrc
 ```
 

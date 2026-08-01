@@ -31,7 +31,18 @@ PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
 PGDATA="${PGDATA:-$PREFIX/var/lib/postgresql}"
 LOGFILE="$PGDATA/server.log"
 DISTRO="${LASMA_DISTRO:-ubuntu}"
-ROOTFS="$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"
+# proot-distro moved the rootfs at some point: newer versions keep it under
+# containers/<distro>/rootfs, older ones under installed-rootfs/<distro>.
+# Detect rather than assume, and fall back to the newer layout for messages.
+find_rootfs() {
+    local d
+    for d in "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"              "$PREFIX/var/lib/proot-distro/installed-rootfs/$DISTRO"; do
+        [ -d "$d" ] && { echo "$d"; return 0; }
+    done
+    echo "$PREFIX/var/lib/proot-distro/containers/$DISTRO/rootfs"
+    return 1
+}
+ROOTFS=$(find_rootfs)
 
 DB_USER="${PGUSER:-postgres}"
 DB_NAME="${PGDATABASE:-lasma_bot}"
