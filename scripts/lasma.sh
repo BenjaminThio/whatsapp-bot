@@ -83,6 +83,30 @@ need_distro() {
 
 is_up() { tmux has-session -t "$(session_for "$1")" 2>/dev/null; }
 
+# Android suspends Termux a few minutes after the screen goes off, which kills
+# the tmux server, the supervisors and both bots. The wakelock is the only thing
+# that stops it, and it is a plain command - no reason to make you tap it in the
+# notification tray every time.
+#
+# It is reference-free: one acquire covers everything, and it stays until
+# released or Termux exits. Battery optimisation still has to be turned off for
+# Termux separately, in Android's settings - that part cannot be scripted.
+acquire_wakelock() {
+    [ "$IN_TERMUX" -eq 1 ] || return 0
+    command -v termux-wake-lock >/dev/null 2>&1 || return 0
+    termux-wake-lock 2>/dev/null && echo "wakelock acquired (Termux will not be suspended)"
+}
+
+# Only drop it once nothing is left running, or stopping one bot would let
+# Android suspend the other.
+release_wakelock_if_idle() {
+    [ "$IN_TERMUX" -eq 1 ] || return 0
+    command -v termux-wake-unlock >/dev/null 2>&1 || return 0
+    is_up whatsapp && return 0
+    is_up telegram && return 0
+    termux-wake-unlock 2>/dev/null && echo "wakelock released (nothing left running)"
+}
+
 # The database runs natively in Termux and nothing starts it automatically -
 # Termux has no init, and the proot cannot run Postgres at all. The bots refuse
 # to start without it, so bring it up here, before the supervisor is launched.
@@ -106,6 +130,7 @@ start_bot() {
 
     need_tmux
     need_distro
+    acquire_wakelock
     ensure_postgres
     tmux new-session -d -s "$session" "$(runner_for "$bot")"
     echo "started $bot (tmux: $session)"
@@ -125,12 +150,17 @@ stop_bot() {
     [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null
 
     for _ in $(seq 1 15); do
-        is_up "$bot" || { echo "stopped $bot"; return 0; }
+        if ! is_up "$bot"; then
+            echo "stopped $bot"
+            release_wakelock_if_idle
+            return 0
+        fi
         sleep 1
     done
 
     tmux kill-session -t "$session" 2>/dev/null
     echo "force-killed $bot"
+    release_wakelock_if_idle
 }
 
 status_bot() {
@@ -235,6 +265,11 @@ case "$ACTION" in
                 echo "  postgres: running (Termux, 127.0.0.1:${PGPORT:-5432})"
             else
                 echo "  postgres: stopped - run 'pg start'"
+            fi
+        fi
+        if [ "$IN_TERMUX" -eq 1 ] && command -v termux-wake-lock >/dev/null 2>&1; then
+            if is_up whatsapp || is_up telegram; then
+                echo "  wakelock: held while a bot is running"
             fi
         fi
         for b in "${BOTS[@]}"; do status_bot "$b"; done ;;
