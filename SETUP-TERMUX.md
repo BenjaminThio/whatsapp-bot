@@ -1,8 +1,18 @@
 # Rebuilding Lasma on a fresh Termux
 
-Everything, Postgres included, lives **inside the Ubuntu proot**. Nothing is
-mounted across from Termux, so there is one filesystem, one set of paths, and no
-`/data/data/com.termux/...` links to keep straight.
+The bots run **inside the Ubuntu proot**. The database runs **natively in
+Termux**, and they talk over `127.0.0.1`.
+
+That split is not a preference, it is a requirement. Postgres cannot be
+initialised inside proot-distro: `/dev/shm` there is a bind to an ordinary
+directory rather than a tmpfs, because proot cannot mount one, and the POSIX
+shared-memory calls Postgres makes block forever on it - `initdb` hangs at
+`selecting default shared_buffers` and never returns. Run natively in Termux it
+skips proot's syscall emulation entirely.
+
+Nothing is mounted across. The proot shares Termux's network namespace, so
+`127.0.0.1:5432` reaches the Termux server from inside Ubuntu with no links or
+bind mounts to keep straight.
 
 Step 0 runs in your current install. After that, take **the fast path** just
 below, or work through the manual steps it automates.
@@ -18,7 +28,7 @@ regenerated.
 mkdir -p /sdcard/lasma-backup
 
 # Database dump
-pg_dump -h 127.0.0.1 -U lasma lasma_bot > /sdcard/lasma-backup/lasma.sql
+pg_dump -h 127.0.0.1 -U postgres lasma_bot > /sdcard/lasma-backup/lasma.sql
 
 # WhatsApp pairing state. Without it you re-scan the QR from the phone.
 cp -r ~/bots/lasma-bot/whatsapp/auth_info_baileys /sdcard/lasma-backup/
@@ -46,35 +56,51 @@ You need roughly **3 GB free** for the finished install: 740 MB of assets,
 
 ## The fast path
 
-Four commands, start to finish. Each is explained in the manual steps below if
-you would rather see what it does.
+Five commands. Each is explained in the manual steps below.
 
-**In Termux**, after reinstalling it:
+**1. In Termux**, after reinstalling it:
 
 ```bash
-pkg update -y && pkg install -y proot-distro git tmux && termux-setup-storage
+pkg update -y && pkg install -y proot-distro git tmux postgresql && termux-setup-storage
+```
+
+**2. Install Ubuntu and clone the project into it:**
+
+```bash
+proot-distro install ubuntu && proot-distro login ubuntu -- bash -c 'mkdir -p ~/bots && cd ~/bots && git clone <your-repo-url> lasma-bot'
+```
+
+**3. Back at the Termux prompt, start the database** - it runs here, natively,
+not in the proot:
+
+```bash
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-postgres.sh
+```
+
+It installs Postgres if needed, initialises a UTF-8 cluster, starts it, creates
+the role and database, and asks you for a password to set on the role. Note
+that password down - `setup.sh` asks for it again in the next step.
+
+**4. Inside Ubuntu, run the installer:**
+
+```bash
+proot-distro login ubuntu
 ```
 
 ```bash
-proot-distro install ubuntu && proot-distro login ubuntu
+cd ~/bots/lasma-bot && bash scripts/setup.sh
 ```
 
-**Inside Ubuntu**, clone the project and run the installer:
+`setup.sh` does the other eleven steps: packages, locale, Bun, the database
+connection check, dependencies, the venv, the backup restore, the schema, the
+dict index, the emoji dataset, the chess addon, then a verification pass. If
+`shared/.env` is missing and there is no backup it stops and asks you for each
+secret, so have your keys to hand.
 
-```bash
-mkdir -p ~/bots && cd ~/bots && git clone <your-repo-url> lasma-bot && bash lasma-bot/scripts/setup.sh
-```
-
-`setup.sh` does the other eleven steps: packages, locale, Bun, the Postgres
-cluster and role, dependencies, the venv, the backup restore, the schema, the
-dict index, the chess addon, then a verification pass. If `shared/.env` is
-missing and there is no backup it stops and asks you for each secret, so have
-your keys to hand.
-
-Two things it will do that take real time and data, both only when the file is
-missing and no backup supplied it: building the Wiktionary index (~1.2 GB
-downloaded, ~11 GB temporary, hours of indexing, all of it cleaned up
-afterwards) and compiling the chess addon. Skip the first with `--skip-dict`.
+One thing it may do that takes real time and data, and only when the file is
+missing and no backup supplied it: building the Wiktionary index - ~1.2 GB
+downloaded, ~11 GB temporary, hours of indexing, all cleaned up afterwards.
+Skip it with `--skip-dict`.
 
 Every step checks whether it is already done, so it is safe to re-run. If
 something fails it says which step, and you fix it and re-run just that one:
@@ -88,15 +114,19 @@ bash scripts/setup.sh --list      # what the steps are
 bash scripts/setup.sh --from 6    # resume from step 6
 ```
 
-**Back in Termux**, install the shortcuts so you never have to log into Ubuntu
-by hand again:
+**5. Back in Termux**, install the shortcuts so you never have to log into
+Ubuntu by hand again:
+
+```bash
+exit
+```
 
 ```bash
 bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-install.sh && source ~/.bashrc
 ```
 
-Then `w` starts the WhatsApp bot and `t` starts the Telegram one, from the
-Termux prompt.
+Then `w` starts the WhatsApp bot and `t` the Telegram one, from the Termux
+prompt. Both start the database first if it is down.
 
 ### Secrets, without nano
 
@@ -116,9 +146,10 @@ scripts/configure-env.sh --show       # what is set, secrets masked
 scripts/configure-env.sh --postgres   # only the database block
 ```
 
-The Postgres block is asked first because `setup.sh` reads `PGPASSWORD` back
-out of `shared/.env` and creates the database role with it. Choose the password
-here and nothing else needs to know it.
+The Postgres block must match what `termux-postgres.sh` created: host
+`127.0.0.1`, role `postgres`, database `lasma_bot`, and the password you gave
+it. If the project was already cloned when you ran it, it wrote those values
+into `shared/.env` for you and you can press Enter through them.
 
 ---
 
@@ -173,12 +204,15 @@ apt install -y \
   build-essential cmake ninja-build pkg-config \
   python3 python3-pip python3-venv \
   ffmpeg \
-  postgresql postgresql-contrib \
+  postgresql-client \
   libvips-dev
 ```
 
-Generate a locale before touching Postgres. `initdb` fails on a system with no
-locales, and the error it gives does not say so.
+Only the Postgres *client* goes in here - `psql` and `pg_dump`, to reach the
+Termux server. Installing the server package in the proot is what leads to the
+`initdb` hang.
+
+Generate a locale anyway; some tooling expects one.
 
 ```bash
 locale-gen en_US.UTF-8
@@ -191,7 +225,7 @@ export LANG=en_US.UTF-8
 | `build-essential cmake ninja-build` | the chess renderer and `dict_lookup` |
 | `python3-venv` | the media engines (gTTS, rembg, denoise, yt-dlp) |
 | `ffmpeg` | `/convert` and `/denoise` |
-| `postgresql` | the shared database |
+| `postgresql-client` | `psql`/`pg_dump` to reach the Termux server. The server itself is NOT installed here |
 | `libvips-dev` | `sharp`, used by the timetable renderer |
 | `tmux` | keeping both bots alive after you close Termux |
 
@@ -207,40 +241,57 @@ If Bun's prebuilt binary will not run on your device, install Node 20+
 (`apt install -y nodejs npm`) and substitute `node`/`npx` for `bun` throughout.
 The code is plain ESM TypeScript.
 
-## 5. Postgres, inside Ubuntu
+## 5. Postgres, in Termux
 
-proot has no systemd, so `service postgresql start` usually fails. Start the
-server directly.
+**This step runs in Termux, not in Ubuntu.** The server cannot run inside the
+proot at all - see the note at the top.
 
 ```bash
-mkdir -p /var/lib/postgresql/data /var/run/postgresql
-chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
-chmod 775 /var/run/postgresql
-
-su postgres -c "/usr/lib/postgresql/*/bin/initdb -D /var/lib/postgresql/data"
-su postgres -c "/usr/lib/postgresql/*/bin/pg_ctl -D /var/lib/postgresql/data -l /var/lib/postgresql/log start"
+bash $PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu/root/bots/lasma-bot/scripts/termux-postgres.sh
 ```
 
-Create the role and database:
+That does all of the following, and is safe to re-run:
 
 ```bash
-su postgres -c "psql -c \"CREATE USER lasma WITH PASSWORD 'choose-a-password' SUPERUSER;\""
-su postgres -c "psql -c 'CREATE DATABASE lasma_bot OWNER lasma;'"
+pkg install -y postgresql
+initdb -D $PREFIX/var/lib/postgresql --encoding=UTF8 --locale=C.UTF-8
+pg_ctl -D $PREFIX/var/lib/postgresql -l $PREFIX/var/lib/postgresql/server.log start
+createuser -s postgres          # the bootstrap superuser is your Termux user
+createdb -O postgres lasma_bot
 ```
 
-Check it:
+The encoding is set explicitly. Left to the ambient locale it comes out
+`SQL_ASCII`, which stores bytes with no validation - fine until the first emoji
+or accented name meets `upper()`, `ILIKE` or `ORDER BY`, and it cannot be
+changed without rebuilding the cluster.
+
+Day to day:
 
 ```bash
-psql -h 127.0.0.1 -U lasma -d lasma_bot -c 'SELECT version();'
+pg status      # or: termux-postgres.sh status
+pg start
+pg stop
 ```
 
-**Bringing it up after a reboot.** proot starts nothing on its own, so put this
-in `~/.bashrc` and it comes up with your shell:
+Termux has no init, so nothing starts it on boot - but `w` and `t` start it
+for you before launching a bot, so in practice you rarely type `pg start`.
+
+Check it from **inside Ubuntu**, which is the connection that actually matters:
 
 ```bash
-cat >> ~/.bashrc <<'EOF'
-pg_isready -q 2>/dev/null || su postgres -c "/usr/lib/postgresql/*/bin/pg_ctl -D /var/lib/postgresql/data -l /var/lib/postgresql/log start"
-EOF
+pg_isready -h 127.0.0.1 -p 5432 && psql -h 127.0.0.1 -U postgres -d lasma_bot -c 'SHOW server_encoding;'
+```
+
+If that works, the network path across the proot boundary is fine and
+`setup.sh` step 3 will pass.
+
+**Locked out?** The local socket is left on trust auth so you can always
+administer it from Termux. To reset the password, or to drop TCP back to no
+password:
+
+```bash
+termux-postgres.sh --password 'newpassword'
+termux-postgres.sh --trust
 ```
 
 ## 6. The project
@@ -323,7 +374,7 @@ its own; everything it reads is shared.
 Restoring a dump gives you the schema and the data in one go:
 
 ```bash
-psql -h 127.0.0.1 -U lasma -d lasma_bot < /sdcard/lasma-backup/lasma.sql
+psql -h 127.0.0.1 -U postgres -d lasma_bot < /sdcard/lasma-backup/lasma.sql
 ```
 
 For a fresh database instead:
@@ -525,10 +576,12 @@ bash scripts/lasma.sh both status             # both bots
 
 ## If something breaks
 
-**`initdb` fails on locale.** Run the `locale-gen` block in step 3 first.
+**`pg_isready` fails.** The server lives in Termux, not the proot. Exit to
+Termux and run `pg start` (or `termux-postgres.sh start`).
 
-**`pg_isready` fails.** proot has no systemd. Start it by hand:
-`su postgres -c "/usr/lib/postgresql/*/bin/pg_ctl -D /var/lib/postgresql/data start"`
+**`initdb` hangs at "selecting default shared_buffers".** You are trying to run
+it inside the proot. It will never finish there. Kill it with
+`pkill -9 -f initdb` and use `termux-postgres.sh` from Termux instead.
 
 **`Postgres is unreachable` at boot.** The bot refuses to start rather than
 half-running. Check `PGHOST` and `PGPASSWORD` in `shared/.env` match the role

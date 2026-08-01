@@ -35,6 +35,7 @@ echo "project: $UROOT  (inside the proot)"
 
 command -v proot-distro >/dev/null 2>&1 || { echo "installing proot-distro"; pkg install -y proot-distro; }
 command -v tmux         >/dev/null 2>&1 || { echo "installing tmux";         pkg install -y tmux; }
+command -v pg_ctl       >/dev/null 2>&1 || { echo "installing postgresql";   pkg install -y postgresql; }
 
 RC="$HOME/.bashrc"
 if grep -q "lasma.sh" "$RC" 2>/dev/null; then
@@ -48,8 +49,9 @@ w()     { bash "$HERE/lasma.sh" whatsapp "\$@"; }
 t()     { bash "$HERE/lasma.sh" telegram "\$@"; }
 lasma() { bash "$HERE/lasma.sh" both     "\$@"; }
 ub()    { proot-distro login $DISTRO --bind /sdcard:/sdcard; }
+pg()    { bash "$HERE/termux-postgres.sh" "\$@"; }
 EOF
-    echo "added w, t, lasma and ub to $RC"
+    echo "added w, t, lasma, ub and pg to $RC"
 fi
 
 cat <<EOF
@@ -65,4 +67,6 @@ Then, from the Termux prompt:
   lasma status   both
   w stop         stop it for good
   ub             drop into an Ubuntu shell
+  pg status      the database (it runs here in Termux, not in Ubuntu)
+  pg start       start it - w and t do this for you anyway
 EOF

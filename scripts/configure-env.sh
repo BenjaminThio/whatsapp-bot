@@ -91,11 +91,11 @@ show_only() {
 }
 
 ask_postgres() {
-    section "Postgres" "Local database inside this Ubuntu. Defaults are fine."
-    ask PGHOST     "Host. Keep 127.0.0.1 unless the database is elsewhere." "127.0.0.1"
+    section "Postgres" "The server runs in Termux, reached over 127.0.0.1. Defaults are fine."
+    ask PGHOST     "Host. 127.0.0.1 reaches the Termux server from inside the proot." "127.0.0.1"
     ask PGPORT     "Port." "5432"
-    ask PGUSER     "Role the bots connect as." "lasma"
-    ask PGPASSWORD "Password for that role. Pick anything; setup.sh creates the role with it." "" secret
+    ask PGUSER     "Role the bots connect as - whatever termux-postgres.sh created." "postgres"
+    ask PGPASSWORD "Password for that role, as given to termux-postgres.sh." "" secret
     ask PGDATABASE "Database name." "lasma_bot"
 }
 
@@ -161,7 +161,7 @@ write_shared() {
         echo "# Other services"
         for k in OPEN_WEATHER_API_KEY VERCEL_WEBHOOK_URL; do emit "$k"; done
         echo
-        echo "# Postgres - local to this Ubuntu"
+        echo "# Postgres - the server runs natively in Termux, not in the proot"
         for k in PGHOST PGPORT PGUSER PGPASSWORD PGDATABASE; do emit "$k"; done
     } > "$SHARED_ENV"
     chmod 600 "$SHARED_ENV"

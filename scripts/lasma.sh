@@ -72,6 +72,18 @@ need_distro() {
 
 is_up() { tmux has-session -t "$(session_for "$1")" 2>/dev/null; }
 
+# The database runs natively in Termux and nothing starts it automatically -
+# Termux has no init, and the proot cannot run Postgres at all. The bots refuse
+# to start without it, so bring it up here, before the supervisor is launched.
+ensure_postgres() {
+    [ "$IN_TERMUX" -eq 1 ] || return 0
+    command -v pg_isready >/dev/null 2>&1 || return 0
+    pg_isready -q -h 127.0.0.1 -p "${PGPORT:-5432}" 2>/dev/null && return 0
+
+    echo "postgres is down - starting it"
+    bash "$HERE/termux-postgres.sh" start || echo "could not start postgres; the bot will wait for it"
+}
+
 start_bot() {
     local bot=$1 session
     session=$(session_for "$bot")
@@ -83,6 +95,7 @@ start_bot() {
 
     need_tmux
     need_distro
+    ensure_postgres
     tmux new-session -d -s "$session" "$(runner_for "$bot")"
     echo "started $bot (tmux: $session)"
 }
@@ -200,7 +213,16 @@ case "$ACTION" in
     start)   for b in "${BOTS[@]}"; do start_bot "$b"; done ;;
     stop)    for b in "${BOTS[@]}"; do stop_bot  "$b"; done ;;
     restart) for b in "${BOTS[@]}"; do stop_bot  "$b"; start_bot "$b"; done ;;
-    status)  echo "Lasma:"; for b in "${BOTS[@]}"; do status_bot "$b"; done ;;
+    status)
+        echo "Lasma:"
+        if [ "$IN_TERMUX" -eq 1 ] && command -v pg_isready >/dev/null 2>&1; then
+            if pg_isready -q -h 127.0.0.1 -p "${PGPORT:-5432}" 2>/dev/null; then
+                echo "  postgres: running (Termux, 127.0.0.1:${PGPORT:-5432})"
+            else
+                echo "  postgres: stopped - run 'pg start'"
+            fi
+        fi
+        for b in "${BOTS[@]}"; do status_bot "$b"; done ;;
     attach)  attach_bot "${BOTS[0]}" ;;
     log)     log_bot "${BOTS[0]}" "${1:-80}" ;;
     *)       echo "unknown action: $ACTION" >&2; usage; exit 2 ;;

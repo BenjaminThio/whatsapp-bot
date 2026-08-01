@@ -24,7 +24,7 @@ off=$(tput sgr0 2>/dev/null || echo)
 STEP_NAMES=(
     "apt packages and locale"
     "Bun"
-    "Postgres server, role and database"
+    "Postgres connection (server lives in Termux)"
     "environment files"
     "bun install"
     "Python venv"
@@ -56,39 +56,28 @@ env_get() {
 
 pg_bin() { echo /usr/lib/postgresql/*/bin; }
 
-# Run something as the postgres user.
+# The server runs natively in Termux, not in here.
 #
-# `su postgres -c ...` asks for a password when the caller is not root, and it
-# writes that prompt to the terminal while reading stdin - so with output
-# redirected it looks like a hang rather than a question. runuser never
-# authenticates when called as root, so prefer it and refuse outright when we
-# are not root instead of blocking on an invisible prompt.
-as_postgres() {
-    if [ "$(id -u)" -ne 0 ]; then
-        echo "not root" >&2
-        return 97
-    fi
-    if have runuser; then
-        runuser -u postgres -- bash -c "$1"
-    else
-        su -s /bin/bash postgres -c "$1"
-    fi
+# Postgres cannot be initialised inside proot-distro: /dev/shm is a bind to an
+# ordinary directory rather than a tmpfs, because proot cannot mount one, and
+# the POSIX shared-memory calls block forever on it - initdb hangs at
+# "selecting default shared_buffers" and never returns.
+#
+# The proot shares Termux's network namespace, so 127.0.0.1 reaches the Termux
+# server directly. Only the client tools are needed on this side.
+pg_env() {
+    PGHOST=$(env_get PGHOST || echo 127.0.0.1); [ -z "$PGHOST" ] && PGHOST=127.0.0.1
+    PGPORT=$(env_get PGPORT || echo 5432);      [ -z "$PGPORT" ] && PGPORT=5432
+    PGUSER=$(env_get PGUSER || echo postgres);  [ -z "$PGUSER" ] && PGUSER=postgres
+    PGDATABASE=$(env_get PGDATABASE || echo lasma_bot); [ -z "$PGDATABASE" ] && PGDATABASE=lasma_bot
+    PGPASSWORD=$(env_get PGPASSWORD || echo)
+    export PGHOST PGPORT PGUSER PGDATABASE PGPASSWORD
 }
 
-# -w so psql fails instead of prompting, and a connect timeout so a wedged
-# server cannot stall the whole run
-psql_as_postgres() { as_postgres "PGCONNECT_TIMEOUT=10 psql -w $1"; }
+db_up() { pg_isready -q -h "$PGHOST" -p "$PGPORT" 2>/dev/null; }
 
-start_postgres() {
-    pg_isready -q 2>/dev/null && return 0
-    as_postgres "$(pg_bin)/pg_ctl -D /var/lib/postgresql/data -l /var/lib/postgresql/log start" \
-        >/tmp/lasma-pgstart.log 2>&1
-    for _ in $(seq 1 20); do pg_isready -q 2>/dev/null && return 0; sleep 1; done
-    warn "pg_ctl output:"
-    sed 's/^/      /' /tmp/lasma-pgstart.log 2>/dev/null | head -20
-    [ -f /var/lib/postgresql/log ] && { warn "server log tail:"; tail -15 /var/lib/postgresql/log | sed 's/^/      /'; }
-    return 1
-}
+# -w so it fails instead of prompting; a timeout so a wedged server cannot stall
+db_psql() { PGCONNECT_TIMEOUT=10 psql -w -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" "$@"; }
 
 step_1_packages() {
     if have gcc && have cmake && have psql && have ffmpeg && have python3 && have tmux; then
@@ -99,7 +88,7 @@ step_1_packages() {
             curl wget git unzip nano tmux locales \
             build-essential cmake ninja-build pkg-config \
             python3 python3-pip python3-venv \
-            ffmpeg postgresql postgresql-contrib libvips-dev \
+            ffmpeg postgresql-client libvips-dev \
             || { die "apt install failed"; return; }
         ok "packages installed"
     fi
@@ -124,112 +113,49 @@ step_2_bun() {
 }
 
 step_3_postgres() {
-    local user pass db
-    user=$(env_get PGUSER || echo postgres)
-    pass=$(env_get PGPASSWORD || echo)
-    db=$(env_get PGDATABASE || echo lasma_bot)
-    [ -z "$user" ] && user=postgres
-    [ -z "$db" ] && db=lasma_bot
+    pg_env
 
-    if [ "$(id -u)" -ne 0 ]; then
-        die "step 3 needs root. Inside the proot you normally are - run 'proot-distro login ubuntu' rather than su'ing to another user first."
+    if ! have psql; then
+        die "psql is missing - re-run step 1"
         return
     fi
 
-    if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
-        die "postgres is not installed - re-run step 1"
+    if ! db_up; then
+        die "no Postgres at $PGHOST:$PGPORT"
+        echo "      The database runs in Termux, not in here. Exit to Termux and run:"
+        echo "        bash \$PREFIX/var/lib/proot-distro/installed-rootfs/ubuntu\$HOME/bots/lasma-bot/scripts/termux-postgres.sh"
+        echo "      then come back and re-run:  bash scripts/setup.sh --from 3"
         return
     fi
+    ok "reachable at $PGHOST:$PGPORT"
 
-    local data=/var/lib/postgresql/data
+    if ! db_psql -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
+        die "connected, but cannot authenticate as '$PGUSER'"
+        echo "      Check PGUSER/PGPASSWORD in shared/.env against what"
+        echo "      termux-postgres.sh created. To reset the password, in Termux:"
+        echo "        bash .../scripts/termux-postgres.sh --password 'newpassword'"
+        return
+    fi
+    ok "authenticated as $PGUSER"
 
-    # pg_control is written near the END of initdb, so it is the honest test for
-    # "finished". PG_VERSION appears early: a cluster interrupted partway
-    # through has it and is still unusable, which previously read as
-    # "cluster exists" and then failed to start with a confusing error.
-    if [ -s "$data/global/pg_control" ]; then
-        skip "cluster exists"
-    elif [ -e "$data/PG_VERSION" ] || [ -d "$data/base" ]; then
-        if [ "$REINIT_DB" -eq 1 ]; then
-            warn "removing the unfinished cluster at $data (--reinit-db)"
-            rm -rf "$data"
-        else
-            die "there is a half-initialised cluster at $data - initdb did not finish"
-            echo "      It has no usable database in it. To clear it and start over:"
-            echo "        pkill -f postgres; rm -rf $data"
-            echo "        bash scripts/setup.sh --only 3"
-            echo "      Or re-run with:  bash scripts/setup.sh --only 3 --reinit-db"
-            return
-        fi
+    if db_psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$PGDATABASE'" 2>/dev/null | grep -q 1; then
+        skip "database $PGDATABASE exists"
+    else
+        db_psql -d postgres -qc "CREATE DATABASE $PGDATABASE OWNER $PGUSER;" >/dev/null 2>&1             && ok "database $PGDATABASE created" || die "could not create $PGDATABASE"
     fi
 
-    if [ ! -s "$data/global/pg_control" ]; then
-        rm -f /var/run/postgresql/.s.PGSQL.* "$data/postmaster.pid" 2>/dev/null
-        mkdir -p "$data" /var/run/postgresql
-        chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
-        chmod 775 /var/run/postgresql
-        # Encoding is set explicitly rather than inherited from LANG.
-        #
-        # initdb takes its encoding from the ambient locale, and with LANG unset
-        # that means locale "C" and encoding SQL_ASCII - which does no encoding
-        # validation whatsoever. The bots store emoji, display names and
-        # Wiktionary text, so upper()/ILIKE/ordering would quietly misbehave on
-        # everything non-ASCII, and a UTF-8 dump would restore into a database
-        # that does not know it is UTF-8. Relying on step 1 having exported LANG
-        # also broke `--only 3`, which never runs step 1.
-        #
-        # C.UTF-8 is built into glibc, so it needs no locale-gen and is present
-        # even on a minimal image. en_US.UTF-8 is preferred when it exists.
-        local loc=C.UTF-8
-        locale -a 2>/dev/null | grep -qi "^en_US.utf8$" && loc=en_US.UTF-8
-
-        note_plain "running initdb (encoding UTF8, locale $loc)"
-        note_plain "a minute or two on a phone - let it finish"
-        # Output is NOT suppressed: initdb is slow enough that silence is
-        # indistinguishable from a hang, and its errors are the useful ones
-        as_postgres "$(pg_bin)/initdb -D $data --encoding=UTF8 --locale=$loc" \
-            || { die "initdb failed - see above"; return; }
-        [ -s "$data/global/pg_control" ] \
-            || { die "initdb exited cleanly but produced no pg_control"; return; }
-        ok "cluster initialised"
-    fi
-
-    start_postgres || { die "postgres will not start"; return; }
-    ok "server up"
-
-    # A cluster built without an explicit encoding comes out SQL_ASCII, which
-    # stores bytes with no validation - fine until the first emoji or accented
-    # name goes through upper(), ILIKE or ORDER BY. Say so loudly; it cannot be
-    # changed in place.
+    # SQL_ASCII stores bytes with no validation - fine until the first emoji or
+    # accented name meets upper(), ILIKE or ORDER BY. It cannot be changed in
+    # place, so say so loudly rather than discovering it after a restore.
     local enc
-    enc=$(psql_as_postgres "-tAc \"SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='template1'\"" 2>/dev/null | tr -d ' \r')
+    enc=$(db_psql -d "$PGDATABASE" -tAc "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='$PGDATABASE'" 2>/dev/null | tr -d ' 
+')
     case "$enc" in
         UTF8) ok "encoding UTF8" ;;
-        "")   warn "could not read the cluster encoding" ;;
-        *)    warn "cluster encoding is $enc, not UTF8"
-              warn "emoji and accented text will sort and compare wrongly"
-              warn "to rebuild it (destroys the cluster):  bash scripts/setup.sh --only 3 --reinit-db" ;;
+        "")   warn "could not read the database encoding" ;;
+        *)    warn "encoding is $enc, not UTF8 - emoji and accented text will sort and compare wrongly"
+              warn "rebuild it in Termux with:  termux-postgres.sh --reinit" ;;
     esac
-
-    if [ -z "$pass" ]; then
-        warn "no PGPASSWORD in shared/.env - run step 4, then: bash scripts/setup.sh --only 3"
-        return
-    fi
-
-    if psql_as_postgres "-tAc \"SELECT 1 FROM pg_roles WHERE rolname='$user'\"" 2>/dev/null | grep -q 1; then
-        psql_as_postgres "-c \"ALTER USER $user WITH PASSWORD '$pass';\"" >/dev/null 2>&1
-        skip "role $user exists (password synced)"
-    else
-        psql_as_postgres "-c \"CREATE USER $user WITH PASSWORD '$pass' SUPERUSER;\"" >/dev/null 2>&1 \
-            && ok "role $user created" || die "could not create role $user"
-    fi
-
-    if psql_as_postgres "-tAc \"SELECT 1 FROM pg_database WHERE datname='$db'\"" 2>/dev/null | grep -q 1; then
-        skip "database $db exists"
-    else
-        psql_as_postgres "-c 'CREATE DATABASE $db OWNER $user;'" >/dev/null 2>&1 \
-            && ok "database $db created" || die "could not create database $db"
-    fi
 }
 
 step_4_env() {
@@ -313,14 +239,11 @@ step_7_restore() {
 
 step_8_schema() {
     cd "$ROOT" || return
-    start_postgres || { die "postgres down"; return; }
-
-    local db user
-    db=$(env_get PGDATABASE || echo lasma_bot); [ -z "$db" ] && db=lasma_bot
-    user=$(env_get PGUSER || echo lasma);       [ -z "$user" ] && user=lasma
+    pg_env
+    db_up || { die "postgres unreachable - see step 3"; return; }
 
     local count
-    count=$(su postgres -c "psql -tAd $db -c \"SELECT count(*) FROM information_schema.tables WHERE table_schema='public'\"" 2>/dev/null | tr -d ' ')
+    count=$(db_psql -d "$PGDATABASE" -tAc         "SELECT count(*) FROM information_schema.tables WHERE table_schema='public'"         2>/dev/null | tr -d ' ')
 
     if [ "${count:-0}" -gt 0 ]; then
         skip "$count table(s) already present"
@@ -328,12 +251,13 @@ step_8_schema() {
     fi
 
     if [ -f "$BACKUP/lasma.sql" ]; then
-        if PGPASSWORD=$(env_get PGPASSWORD) psql -h "$(env_get PGHOST)" -U "$user" -d "$db" \
-             -f "$BACKUP/lasma.sql" >/dev/null 2>&1; then
+        if db_psql -d "$PGDATABASE" -f "$BACKUP/lasma.sql" >/tmp/lasma-restore.log 2>&1; then
             ok "restored dump from $BACKUP/lasma.sql"
             return
         fi
-        warn "dump restore failed - creating an empty schema instead"
+        warn "dump restore failed - last lines:"
+        tail -10 /tmp/lasma-restore.log 2>/dev/null | sed 's/^/      /'
+        warn "creating an empty schema instead"
     fi
 
     have bun || { die "bun missing"; return; }
@@ -430,10 +354,17 @@ step_11_chess() {
 
 step_12_verify() {
     cd "$ROOT" || return
-    pg_isready -q 2>/dev/null && ok "postgres reachable" || die "postgres unreachable"
-    local enc
-    enc=$(psql_as_postgres "-tAc \"SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='template1'\"" 2>/dev/null | tr -d ' ')
-    [ "$enc" = "UTF8" ] && ok "database encoding UTF8" || warn "database encoding is ${enc:-unknown}, expected UTF8"
+    pg_env
+
+    if db_up; then
+        ok "postgres reachable at $PGHOST:$PGPORT"
+        local enc
+        enc=$(db_psql -d "$PGDATABASE" -tAc             "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='$PGDATABASE'"             2>/dev/null | tr -d ' ')
+        [ "$enc" = "UTF8" ] && ok "encoding UTF8"             || warn "encoding is ${enc:-unknown}, expected UTF8"
+    else
+        die "postgres unreachable - start it in Termux: termux-postgres.sh start"
+    fi
+
     [ -d node_modules ] && ok "dependencies" || die "node_modules missing"
     .venv/bin/python -c "import gtts" 2>/dev/null && ok "python engines" || warn "python engines incomplete"
     [ -f shared/assets/data/emoji.jsonl ] && ok "emoji dataset" || warn "emoji dataset missing"
@@ -443,7 +374,7 @@ step_12_verify() {
     [ -d whatsapp/auth_info_baileys ] && ok "whatsapp pairing" || warn "whatsapp will show a QR on first start"
 }
 
-FROM=1; TO=${#STEP_NAMES[@]}; SKIP_DICT=0; SKIP_EMOJI=0; REINIT_DB=0
+FROM=1; TO=${#STEP_NAMES[@]}; SKIP_DICT=0; SKIP_EMOJI=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -451,7 +382,6 @@ while [ $# -gt 0 ]; do
         --from) FROM=${2:-1}; shift ;;
         --only) FROM=${2:-1}; TO=${2:-1}; shift ;;
         --skip-dict) SKIP_DICT=1 ;;
-        --reinit-db) REINIT_DB=1 ;;
         --skip-emoji) SKIP_EMOJI=1 ;;
         --skip-assets) SKIP_DICT=1; SKIP_EMOJI=1 ;;
         --help|-h) sed -n '2,14p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;

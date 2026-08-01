@@ -50,30 +50,27 @@ trim_log() {
     fi
 }
 
-# The bot exits immediately when Postgres is unreachable, so bring the database
-# up first rather than burning the whole backoff ladder waiting for it.
+# The bot exits immediately when Postgres is unreachable, so wait for it rather
+# than burning the whole backoff ladder on a database that is merely slow.
 #
-# proot has no systemd and no init, so nothing else is going to start it. When
-# the bots are launched from Termux the login shell is non-interactive too, so
-# the ~/.bashrc hook does not fire either. This is the only reliable place.
+# The server runs natively in TERMUX, not in this proot - Postgres cannot be
+# initialised in here, because proot cannot mount a tmpfs on /dev/shm and the
+# POSIX shared-memory calls block forever on the ordinary directory it binds
+# instead. Nothing in this process can start it; lasma.sh does that on the
+# Termux side before it launches us. All we can do is wait.
 wait_for_postgres() {
     command -v pg_isready >/dev/null 2>&1 || return 0
-    pg_isready -q 2>/dev/null && return 0
 
-    note "postgres is down - starting it"
-    local bindir
-    bindir=$(echo /usr/lib/postgresql/*/bin)
-    if [ -x "$bindir/pg_ctl" ]; then
-        su postgres -c "$bindir/pg_ctl -D /var/lib/postgresql/data -l /var/lib/postgresql/log start" \
-            >/dev/null 2>&1
-    fi
+    local host=${PGHOST:-127.0.0.1} port=${PGPORT:-5432}
+    pg_isready -q -h "$host" -p "$port" 2>/dev/null && return 0
 
+    note "waiting for postgres at $host:$port (it runs in Termux)"
     local waited=0
-    while ! pg_isready -q 2>/dev/null; do
+    while ! pg_isready -q -h "$host" -p "$port" 2>/dev/null; do
         sleep 3
         waited=$((waited + 3))
         if [ "$waited" -ge 120 ]; then
-            note "postgres still down after ${waited}s - starting the bot anyway"
+            note "still down after ${waited}s - start it in Termux: termux-postgres.sh start"
             return 0
         fi
     done
