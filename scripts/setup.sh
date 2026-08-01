@@ -168,11 +168,27 @@ step_3_postgres() {
         mkdir -p "$data" /var/run/postgresql
         chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql
         chmod 775 /var/run/postgresql
-        note_plain "running initdb - a minute or two on a phone, let it finish"
+        # Encoding is set explicitly rather than inherited from LANG.
+        #
+        # initdb takes its encoding from the ambient locale, and with LANG unset
+        # that means locale "C" and encoding SQL_ASCII - which does no encoding
+        # validation whatsoever. The bots store emoji, display names and
+        # Wiktionary text, so upper()/ILIKE/ordering would quietly misbehave on
+        # everything non-ASCII, and a UTF-8 dump would restore into a database
+        # that does not know it is UTF-8. Relying on step 1 having exported LANG
+        # also broke `--only 3`, which never runs step 1.
+        #
+        # C.UTF-8 is built into glibc, so it needs no locale-gen and is present
+        # even on a minimal image. en_US.UTF-8 is preferred when it exists.
+        local loc=C.UTF-8
+        locale -a 2>/dev/null | grep -qi "^en_US.utf8$" && loc=en_US.UTF-8
+
+        note_plain "running initdb (encoding UTF8, locale $loc)"
+        note_plain "a minute or two on a phone - let it finish"
         # Output is NOT suppressed: initdb is slow enough that silence is
         # indistinguishable from a hang, and its errors are the useful ones
-        as_postgres "$(pg_bin)/initdb -D $data" \
-            || { die "initdb failed - see above, usually the locale from step 1"; return; }
+        as_postgres "$(pg_bin)/initdb -D $data --encoding=UTF8 --locale=$loc" \
+            || { die "initdb failed - see above"; return; }
         [ -s "$data/global/pg_control" ] \
             || { die "initdb exited cleanly but produced no pg_control"; return; }
         ok "cluster initialised"
@@ -180,6 +196,20 @@ step_3_postgres() {
 
     start_postgres || { die "postgres will not start"; return; }
     ok "server up"
+
+    # A cluster built without an explicit encoding comes out SQL_ASCII, which
+    # stores bytes with no validation - fine until the first emoji or accented
+    # name goes through upper(), ILIKE or ORDER BY. Say so loudly; it cannot be
+    # changed in place.
+    local enc
+    enc=$(psql_as_postgres "-tAc \"SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='template1'\"" 2>/dev/null | tr -d ' \r')
+    case "$enc" in
+        UTF8) ok "encoding UTF8" ;;
+        "")   warn "could not read the cluster encoding" ;;
+        *)    warn "cluster encoding is $enc, not UTF8"
+              warn "emoji and accented text will sort and compare wrongly"
+              warn "to rebuild it (destroys the cluster):  bash scripts/setup.sh --only 3 --reinit-db" ;;
+    esac
 
     if [ -z "$pass" ]; then
         warn "no PGPASSWORD in shared/.env - run step 4, then: bash scripts/setup.sh --only 3"
@@ -401,6 +431,9 @@ step_11_chess() {
 step_12_verify() {
     cd "$ROOT" || return
     pg_isready -q 2>/dev/null && ok "postgres reachable" || die "postgres unreachable"
+    local enc
+    enc=$(psql_as_postgres "-tAc \"SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='template1'\"" 2>/dev/null | tr -d ' ')
+    [ "$enc" = "UTF8" ] && ok "database encoding UTF8" || warn "database encoding is ${enc:-unknown}, expected UTF8"
     [ -d node_modules ] && ok "dependencies" || die "node_modules missing"
     .venv/bin/python -c "import gtts" 2>/dev/null && ok "python engines" || warn "python engines incomplete"
     [ -f shared/assets/data/emoji.jsonl ] && ok "emoji dataset" || warn "emoji dataset missing"
