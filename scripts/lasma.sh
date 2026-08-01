@@ -174,6 +174,10 @@ t()     { bash "$self" telegram "\$@"; }
 lasma() { bash "$self" both     "\$@"; }
 EOF
     echo "added w, t and lasma to $rc"
+    # `w` is also a stock procps utility (it lists logged-in users). A shell
+    # function wins over an external command, so ours takes over once sourced -
+    # but before that, typing `w` silently runs the system one instead.
+    command -v w >/dev/null 2>&1 &&         echo "note: w also exists as a system command; the function shadows it once loaded"
     echo "run:  source ~/.bashrc"
 }
 

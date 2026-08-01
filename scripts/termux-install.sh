@@ -66,6 +66,7 @@ ub()    { proot-distro login $DISTRO --bind /sdcard:/sdcard; }
 pg()    { bash "$HERE/termux-postgres.sh" "\$@"; }
 EOF
     echo "added w, t, lasma, ub and pg to $RC"
+    command -v w >/dev/null 2>&1 &&         echo "note: w is also a system command; the function shadows it after sourcing"
 fi
 
 cat <<EOF

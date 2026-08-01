@@ -17,6 +17,11 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKUP="${LASMA_BACKUP:-/sdcard/lasma-backup}"
 
+# Bun installs to ~/.bun/bin and appends its PATH line to ~/.bashrc, which
+# Ubuntu skips entirely for non-interactive shells. Set it here so every step
+# can find bun - including when only one step is run and step 2 never executed.
+export PATH="${BUN_INSTALL:-$HOME/.bun}/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+
 bold=$(tput bold 2>/dev/null || echo); red=$(tput setaf 1 2>/dev/null || echo)
 grn=$(tput setaf 2 2>/dev/null || echo); ylw=$(tput setaf 3 2>/dev/null || echo)
 off=$(tput sgr0 2>/dev/null || echo)
@@ -105,11 +110,22 @@ step_1_packages() {
 }
 
 step_2_bun() {
-    if have bun; then skip "bun $(bun --version)"; return; fi
+    if have bun; then skip "bun $(bun --version) at $(command -v bun)"; return; fi
+
     curl -fsSL https://bun.sh/install | bash >/dev/null 2>&1
-    export PATH="$HOME/.bun/bin:$PATH"
-    if have bun; then ok "bun $(bun --version)"
-    else die "bun install failed - install nodejs instead and use node/npx"; fi
+    export PATH="${BUN_INSTALL:-$HOME/.bun}/bin:$PATH"
+
+    if have bun; then
+        ok "bun $(bun --version)"
+        # ~/.bashrc is not read by the non-interactive shells the bots run in,
+        # so also record it where a login shell will pick it up
+        if ! grep -q "\.bun/bin" "$HOME/.profile" 2>/dev/null; then
+            echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.profile"
+            ok "added bun to ~/.profile"
+        fi
+    else
+        die "bun install failed - install nodejs instead and use node/npx"
+    fi
 }
 
 step_3_postgres() {
@@ -183,8 +199,58 @@ step_5_deps() {
         return
     fi
     have bun || { die "bun missing"; return; }
-    bun install || { die "bun install failed - libvips-dev missing?"; return; }
-    ok "workspace dependencies installed"
+
+    local log=/tmp/lasma-buninstall.log
+
+    if bun install 2>&1 | tee "$log"; then
+        ok "workspace dependencies installed"
+        return
+    fi
+
+    # Bun hardlinks packages into node_modules by default. proot emulates the
+    # filesystem and hardlinks across its layers can fail outright, which shows
+    # up as an install error that has nothing to do with any package.
+    warn "first attempt failed - retrying with --backend=copyfile"
+    if bun install --backend=copyfile 2>&1 | tee -a "$log"; then
+        ok "workspace dependencies installed (copyfile backend)"
+        return
+    fi
+
+    if grep -qi "sharp" "$log"; then
+        # sharp's actual binary ships as a platform-gated optional dependency
+        # (@img/sharp-linux-arm64 and friends). If the platform is detected
+        # wrongly under proot the right one is never fetched, and sharp then
+        # fails at require() time complaining about a missing runtime. Naming
+        # the platform explicitly gets the correct package.
+        local cpu
+        case "$(uname -m)" in
+            aarch64|arm64) cpu=arm64 ;;
+            x86_64|amd64)  cpu=x64 ;;
+            *)             cpu="" ;;
+        esac
+
+        if [ -n "$cpu" ]; then
+            warn "sharp looks like the culprit - retrying with --cpu=$cpu --os=linux"
+            if bun install --backend=copyfile --cpu="$cpu" --os=linux 2>&1 | tee -a "$log"; then
+                ok "workspace dependencies installed (platform forced to linux/$cpu)"
+                return
+            fi
+        fi
+
+        # sharp is the only dependency with a native component and it is used by
+        # exactly one feature. Getting the other 300-odd packages in beats
+        # failing the whole step for it.
+        warn "still failing - installing everything except optional packages"
+        if bun install --backend=copyfile --omit=optional 2>&1 | tee -a "$log"; then
+            warn "installed without optional packages - the timetable image will not render"
+            warn "everything else works; fix it later with: bun install --cpu=$cpu --os=linux"
+            return
+        fi
+    fi
+
+    die "bun install failed"
+    echo "      Last lines of $log:"
+    tail -25 "$log" 2>/dev/null | sed 's/^/      /'
 }
 
 step_6_venv() {

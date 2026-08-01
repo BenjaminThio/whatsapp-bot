@@ -23,6 +23,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="$ROOT/logs"
 LOG="$LOG_DIR/$BOT.log"
 
+# Bun's installer appends its PATH line to ~/.bashrc, and Ubuntu's ~/.bashrc
+# returns immediately when the shell is not interactive. We are launched as
+# `proot-distro login ubuntu -- bash supervise.sh`, which is neither
+# interactive nor a login shell, so that line never runs and bun is not found.
+# Put the usual locations on PATH here instead of depending on a profile.
+export PATH="${BUN_INSTALL:-$HOME/.bun}/bin:$HOME/.local/bin:/usr/local/bin:$PATH"
+
 mkdir -p "$LOG_DIR"
 
 MIN_BACKOFF=5
@@ -87,8 +94,18 @@ trap on_signal INT TERM
 
 cd "$ROOT" || exit 1
 
+# Fail loudly and immediately rather than restart-looping on something a retry
+# cannot fix
+if ! command -v bun >/dev/null 2>&1; then
+    note "bun is not on PATH and was not found in ${BUN_INSTALL:-$HOME/.bun}/bin"
+    note "install it inside the proot with:"
+    note "  curl -fsSL https://bun.sh/install | bash"
+    note "or, if it is installed somewhere else, set BUN_INSTALL to its parent"
+    exit 1
+fi
+
 backoff=$MIN_BACKOFF
-note "supervising $BOT (pid $$)"
+note "supervising $BOT (pid $$) using $(command -v bun)"
 
 while :; do
     wait_for_postgres
@@ -107,6 +124,10 @@ while :; do
     case "$code" in
         0)   note "$BOT exited cleanly after ${ran}s - not restarting"; exit 0 ;;
         130|143) note "$BOT interrupted after ${ran}s - not restarting";  exit 0 ;;
+        127) # command not found - a missing binary is never fixed by waiting
+             note "exit 127: something the bot runs is not installed"
+             note "not restarting, because retrying cannot fix a missing command"
+             exit 1 ;;
     esac
 
     if [ "$ran" -ge "$HEALTHY_AFTER" ]; then

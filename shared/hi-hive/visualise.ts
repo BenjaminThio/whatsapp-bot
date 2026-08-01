@@ -10,8 +10,47 @@
  *   bun add sharp
  */
 
-import sharp from "sharp";
 import { DAY_NAMES, hhmm, type Slot } from "./timetable.js";
+
+/**
+ * sharp is loaded on first render, not at import time.
+ *
+ * It is the only dependency with a native binary, and the one most likely to be
+ * missing on a phone - its real code ships as a platform-gated optional package
+ * (@img/sharp-linux-arm64 and friends), so a bad platform detection or a
+ * partial install leaves it unusable.
+ *
+ * At the top of the file that failure took the whole attendance suite down with
+ * it, because this module is imported by hi-hive's command file. Loading it
+ * here means only the timetable image is lost.
+ */
+type Sharp = typeof import("sharp").default;
+let sharpModule: Sharp | null = null;
+
+async function loadSharp(): Promise<Sharp> {
+  if (sharpModule) return sharpModule;
+  try {
+    sharpModule = (await import("sharp")).default;
+    return sharpModule;
+  } catch (err) {
+    throw new Error(
+      "The timetable image needs `sharp`, which is not installed or will not " +
+      "load on this platform. Everything else in hi-hive still works. " +
+      "Reinstall it with: bun install --cpu=arm64 --os=linux\n" +
+      `Original error: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+
+/** Is the timetable renderer usable? Lets callers offer text instead. */
+export async function canRenderTimetable(): Promise<boolean> {
+  try {
+    await loadSharp();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 const PALETTE = [
   "#2a78d6", "#1baf7a", "#eda100", "#e34948",
@@ -190,6 +229,7 @@ export async function renderTimetablePng(
   subtitle = "",
   opts: { format?: "png" | "jpeg"; quality?: number } = {}
 ): Promise<Buffer> {
+  const sharp = await loadSharp();
   const svg = buildSvg(slots, title, subtitle);
   const image = sharp(Buffer.from(svg));
 
