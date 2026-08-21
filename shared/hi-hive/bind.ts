@@ -22,6 +22,7 @@ import {
   loadCreds, saveCreds, exists, bindAlias, unbindAlias, resolveAlias,
   aliasesForDoc, resolveDocId, claimDoc, type Alias,
 } from "./creds.js";
+import { setDocIdentity } from "./identity.js";
 import type { Creds } from "./types.js";
 
 export type Transport = "whatsapp" | "telegram";
@@ -55,7 +56,8 @@ export function parseBool(v: string | undefined): boolean | undefined {
  * points at a real row.
  */
 export async function bindToExisting(
-  targetId: string, docRef: string, transport: Transport, boundBy: string
+  targetId: string, docRef: string, transport: Transport, boundBy: string,
+  displayName?: string | null
 ): Promise<BindResult> {
   const target = targetId.trim();
   if (!target) return { ok: false, message: "No target id given." };
@@ -93,6 +95,10 @@ export async function bindToExisting(
   */
   const wasOwnedBy = await claimDoc(docId);
 
+  // The jid is known for certain here, unlike the passive capture that waits
+  // for someone to speak
+  await setDocIdentity(docId, target, displayName);
+
   const creds = await loadCreds(docId);
   const who = creds ? (creds.hidden ? "*".repeat(creds.id.length) : creds.id) : docId;
 
@@ -119,7 +125,8 @@ export async function bindToExisting(
  */
 export async function bindNew(
   targetId: string, studentId: string, email: string,
-  hidden: boolean | undefined, transport: Transport, boundBy: string
+  hidden: boolean | undefined, transport: Transport, boundBy: string,
+  displayName?: string | null
 ): Promise<BindResult> {
   const target = targetId.trim();
   const id = studentId.trim();
@@ -160,6 +167,7 @@ export async function bindNew(
   const creds: Creds = { id, email: mail, hidden: hidden ?? false };
   await saveCreds(id, creds);          // doc id IS the student id
   await bindAlias(target, id, transport, boundBy);
+  await setDocIdentity(id, target, displayName);
 
   const moved = previous && previous !== id
     ? `\n⚠️ Moved from \`${previous}\`, which they were bound to before.`

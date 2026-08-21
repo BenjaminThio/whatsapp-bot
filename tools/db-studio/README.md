@@ -1,6 +1,9 @@
 # DB Studio
 
-A Firestore-console-style browser and editor for the bot's Postgres.
+Two views over the bot's data, served by one process:
+
+  /            tables and rows, Firestore-console style, editable
+  /directory   groups and people the bots can see, read-only overview
 
 ```bash
 db

@@ -37,6 +37,11 @@ export interface CommandContext {
     text: string;
 
     chatId: string;
+    /**
+     * The sender's chosen display name, as WhatsApp supplies it on every
+     * message. No lookup and no outbound message - it simply arrives.
+     */
+    pushName: string | null;
     /** The individual who sent it (participant in groups, chat jid otherwise). */
     userId: string;
     isGroup: boolean;
@@ -116,6 +121,7 @@ export function buildContext(params: {
 
         chatId: ids.chatId,
         userId: ids.userId,
+        pushName: params.msg.pushName ?? null,
         isGroup: ids.isGroup,
 
         command: params.command,

@@ -41,6 +41,8 @@ import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shar
 import {
     bindToExisting, bindNew, unbind, bindingsFor, formatBindings, parseBool,
 } from "../../../shared/hi-hive/bind.js";
+import { rememberIdentity, labelFor as rankLabel } from "../../../shared/hi-hive/identity.js";
+import { noteSpoke } from "../../../shared/messaging/directory.js";
 import { renderTimetablePng } from "../../../shared/hi-hive/visualise.js";
 import { randomDelaySec, formatWaitingNoticeGrouped } from "../../../shared/hi-hive/scan-buffer.js";
 import type { Destination } from "../../../shared/hi-hive/destinations.js";
@@ -443,6 +445,20 @@ const hihive = cmd("hihive", {
     usageHint: `Subcommands:\n${HIHIVE_FORMATS.join("\n")}`,
 }, async (ctx: Ctx) => {
     const me = await ownDocId(ctx);
+
+    /*
+    Learn who this is from the update that is already here - grammY puts the
+    sender's name on every one. No lookup, nothing sent, and it only touches a
+    row that already exists.
+    */
+    void rememberIdentity(String(ctx.userId), ctx.who);
+    /*
+    Census. Telegram's Bot API has no way to list a group's members, so unlike
+    WhatsApp there is no harvest to fall back on - seeing someone speak is the
+    only evidence that ever arrives.
+    */
+    void noteSpoke(String(ctx.chatId), String(ctx.userId), 'telegram', ctx.who,
+                   (ctx.tg.chat as any)?.title ?? null);
     const showInfo = (creds: Creds | undefined): string =>
         creds === undefined
             ? "No credentials stored. Register with /hihive set <studentId> <email>."
@@ -525,8 +541,8 @@ const hihive = cmd("hihive", {
             }
 
             const result = rest[1]
-                ? await bindNew(target, rest[0]!, rest[1]!, parseBool(rest[2]), "telegram", String(me))
-                : await bindToExisting(target, rest[0] ?? "", "telegram", String(me));
+                ? await bindNew(target, rest[0]!, rest[1]!, parseBool(rest[2]), "telegram", String(me), replying ? ctx.replyToWho : null)
+                : await bindToExisting(target, rest[0] ?? "", "telegram", String(me), replying ? ctx.replyToWho : null);
 
             await ctx.reply(result.message);
             return;
@@ -653,7 +669,8 @@ const hihive = cmd("hihive", {
                 "🏆 QR contribution ranking\n" +
                 "Who supplies the QR codes everyone scans.\n\n" +
                 rows.map((r, i) => {
-                    const name = r.hidden ? "Hidden User" : r.studentId;
+                    // Prefer the chat name we have seen; fall back to the student id
+                    const name = rankLabel(r);
                     const share = ((r.contributions / total) * 100).toFixed(0);
                     return `${medal(i)} ${name} - ${r.contributions} QR${r.contributions === 1 ? "" : "s"} (${share}%)`;
                 }).join("\n") +

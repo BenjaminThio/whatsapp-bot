@@ -55,6 +55,8 @@ const SCHEMA_FILES = [
   "outbox-schema.sql",
   "telegram-schema.sql",
   "identity-schema.sql",
+  "hihive-identity.sql",
+  "directory-schema.sql",
 ];
 
 let ensured = false;

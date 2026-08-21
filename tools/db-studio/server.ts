@@ -25,6 +25,9 @@ import { file } from "bun";
 import path from "node:path";
 import url from "node:url";
 import sql from "../../shared/db/index.js";
+import {
+    overview, listChats, membersOf, listPeople, chatsOf, forgetChat,
+} from "../../shared/messaging/directory.js";
 
 const HERE = path.dirname(url.fileURLToPath(import.meta.url));
 
@@ -37,6 +40,8 @@ const flag = (name: string, fallback: string): string => {
 const PORT = Number(flag("port", process.env["STUDIO_PORT"] ?? "4321"));
 const HOST = flag("host", "127.0.0.1");
 const PAGE_SIZE = 50;
+// Above this many distinct values a column is free text, not a pick list
+const DISTINCT_LIMIT = 12;
 
 // ── Catalog ───────────────────────────────────────────────────────────────────
 
@@ -46,7 +51,19 @@ interface Column {
     nullable: boolean;
     isPrimaryKey: boolean;
     default: string | null;
+    /**
+     * A bigint that actually holds epoch milliseconds.
+     *
+     * schedules.fire_at, outbox.next_try_at and friends are Date.now() values,
+     * not quantities. Typed as bigint they would get a number box, and editing
+     * one would mean working out an epoch by hand. Flagged here so the editor
+     * can show a date picker instead.
+     */
+    isEpochMs?: boolean;
 }
+
+/** bigint columns whose name says they are a moment in time. */
+const EPOCH_MS_NAME = /(^|_)(at|time|timestamp|due|expires?|until)$/i;
 
 interface TableInfo {
     name: string;
@@ -114,6 +131,8 @@ async function loadCatalog(force = false): Promise<Map<string, TableInfo>> {
                     nullable: c.is_nullable === "YES",
                     isPrimaryKey: pk.includes(c.column_name),
                     default: c.column_default,
+                    ...(c.data_type === "bigint" && EPOCH_MS_NAME.test(c.column_name)
+                        ? { isEpochMs: true } : {}),
                 })),
         });
     }
@@ -150,9 +169,17 @@ class HttpError extends Error {
 
 const JSON_TYPES = new Set(["json", "jsonb"]);
 const NUMERIC_TYPES = new Set([
-    "smallint", "integer", "bigint", "decimal", "numeric", "real",
-    "double precision",
+    "smallint", "integer", "decimal", "numeric", "real", "double precision",
 ]);
+
+/*
+bigint is deliberately NOT in that set.
+
+A bigint can exceed Number.MAX_SAFE_INTEGER, and putting one through Number()
+silently rounds it - 9007199254740993 becomes ...992. Passing the digits
+through as text lets Postgres parse them exactly.
+*/
+const BIGINT_TYPES = new Set(["bigint"]);
 
 /**
  * Turn the editor's string into something the column will accept.
@@ -185,6 +212,18 @@ function coerce(column: Column, raw: unknown): unknown {
         if (["true", "t", "yes", "1"].includes(s)) return true;
         if (["false", "f", "no", "0"].includes(s)) return false;
         throw new HttpError(400, `${column.name} expects a boolean, got "${raw}"`);
+    }
+
+    if (BIGINT_TYPES.has(column.type)) {
+        const t = raw.trim();
+        if (t === "") {
+            if (column.nullable) return null;
+            throw new HttpError(400, `${column.name} cannot be empty`);
+        }
+        if (!/^-?\d+$/.test(t)) {
+            throw new HttpError(400, `${column.name} expects a whole number, got "${raw}"`);
+        }
+        return t;                       // text in, Postgres parses it exactly
     }
 
     if (NUMERIC_TYPES.has(column.type)) {
@@ -326,6 +365,42 @@ async function runHandler(req: Request): Promise<Response> {
         });
     }
 
+    // The directory is a second view over the same data, served by the same
+    // process: one port and one command to remember on a phone.
+    if (p === "/directory" || p === "/directory.html") {
+        return new Response(file(path.join(HERE, "directory.html")), {
+            headers: { "content-type": "text/html; charset=utf-8" },
+        });
+    }
+
+    if (p === "/api/directory/overview") return json(await overview());
+    if (p === "/api/directory/chats")    return json({ chats: await listChats() });
+
+    if (p === "/api/directory/people") {
+        return json({ people: await listPeople(url.searchParams.get("q") ?? "") });
+    }
+
+    const membersMatch = p.match(/^\/api\/directory\/members$/);
+    if (membersMatch) {
+        const chat = url.searchParams.get("chat");
+        const transport = url.searchParams.get("transport");
+        if (!chat || !transport) throw new HttpError(400, "chat and transport are required");
+        return json({ members: await membersOf(chat, transport) });
+    }
+
+    if (p === "/api/directory/person") {
+        const user = url.searchParams.get("user");
+        if (!user) throw new HttpError(400, "user is required");
+        return json({ chats: await chatsOf(user) });
+    }
+
+    if (p === "/api/directory/forget" && req.method === "POST") {
+        const body = await req.json() as any;
+        if (!body.chat || !body.transport) throw new HttpError(400, "chat and transport are required");
+        const removed = await forgetChat(String(body.chat), body.transport);
+        return json({ ok: true, removed });
+    }
+
     if (p === "/api/tables") {
         const cat = await loadCatalog(url.searchParams.get("refresh") === "1");
         return json({ tables: [...cat.values()] });
@@ -333,6 +408,31 @@ async function runHandler(req: Request): Promise<Response> {
 
     const rowsMatch = p.match(/^\/api\/rows\/([A-Za-z0-9_]+)$/);
     if (rowsMatch) return listRows(rowsMatch[1]!, url);
+
+    /*
+    Existing values for one column, when there are few enough to be a menu.
+    Turns free-text columns that are really enums - transport, status - into a
+    pick list, without hardcoding what those values are.
+    */
+    const distinctMatch = p.match(/^\/api\/distinct\/([A-Za-z0-9_]+)\/([A-Za-z0-9_]+)$/);
+    if (distinctMatch) {
+        const table = await requireTable(distinctMatch[1]!);
+        const column = requireColumn(table, distinctMatch[2]!);
+
+        // Only text columns. A JSONB column has a distinct value per row by
+        // definition, so "the existing values" would just be every document.
+        if (!["text", "character varying", "character"].includes(column.type)) {
+            return json({ values: [] });
+        }
+        const rows = await sql.unsafe(
+            `SELECT DISTINCT ${quoteIdent(column.name)}::text AS v
+               FROM ${quoteIdent(table.name)}
+              WHERE ${quoteIdent(column.name)} IS NOT NULL
+              ORDER BY 1 LIMIT ${DISTINCT_LIMIT + 1}`
+        ) as unknown as { v: string }[];
+        // More than the limit means it is free text, not a set of choices
+        return json({ values: rows.length > DISTINCT_LIMIT ? [] : rows.map(r => r.v) });
+    }
 
     // A request body can only be read once, so parse it and pass it along
     if (p === "/api/cell" && req.method === "POST") {
@@ -365,7 +465,8 @@ const server = Bun.serve({
 console.log(`
 🗄️  Lasma DB Studio
 
-    http://${HOST}:${server.port}
+    http://${HOST}:${server.port}            tables and rows
+    http://${HOST}:${server.port}/directory  groups and people
 
     Open that in the phone's browser. Ctrl-C to stop.
     ${HOST === "127.0.0.1"

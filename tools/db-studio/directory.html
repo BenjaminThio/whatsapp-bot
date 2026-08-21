@@ -1,0 +1,588 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lasma Directory</title>
+<style>
+  :root {
+    --bg: #ffffff; --panel: #ffffff; --panel-2: #f8f9fa; --line: #e0e3e7;
+    --text: #202124; --muted: #5f6368; --accent: #1a73e8; --accent-soft: #e8f0fe;
+    --amber: #f9ab00; --green: #1e8e3e; --red: #d93025; --purple: #9334e6;
+    --teal: #12897f;
+    --mono: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #202124; --panel: #292a2d; --panel-2: #35363a; --line: #3c4043;
+      --text: #e8eaed; --muted: #9aa0a6; --accent: #8ab4f8; --accent-soft: #1f3a5f;
+      --amber: #fdd663; --green: #81c995; --red: #f28b82; --purple: #d7aefb;
+      --teal: #78d9ce;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); overflow: hidden;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  header {
+    display: flex; align-items: center; gap: 12px; height: 52px; padding: 0 14px;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 500; font-size: 15px; }
+  .logo .dot { width: 22px; height: 22px; border-radius: 6px; background: var(--teal);
+               display: grid; place-items: center; font-size: 12px; }
+  header .spacer { flex: 1; }
+  a.navlink, .ghost {
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 8px; padding: 7px 11px; font-size: 13px; cursor: pointer;
+    text-decoration: none;
+  }
+  a.navlink:hover, .ghost:hover { background: var(--panel-2); color: var(--text); }
+  input[type=search] {
+    width: 200px; max-width: 38vw; padding: 7px 11px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font-size: 13px;
+  }
+
+  /* ── Tabs ─────────────────────────────────────────────────────────────── */
+  .tabs { display: flex; gap: 4px; padding: 8px 14px 0; border-bottom: 1px solid var(--line);
+          background: var(--panel); }
+  .tab {
+    border: 0; background: none; color: var(--muted); cursor: pointer;
+    padding: 9px 14px; font-size: 13.5px; border-bottom: 3px solid transparent;
+    font-weight: 500;
+  }
+  .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+
+  main { height: calc(100% - 52px - 45px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  .page { display: none; padding: 16px; }
+  .page.on { display: block; }
+
+  /* ── Stat cards ───────────────────────────────────────────────────────── */
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+           gap: 11px; margin-bottom: 20px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
+          padding: 14px 15px; }
+  .stat .n { font-size: 26px; font-weight: 600; line-height: 1.15; }
+  .stat .l { font-size: 11.5px; color: var(--muted); text-transform: uppercase;
+             letter-spacing: .07em; margin-top: 3px; }
+  .stat.a .n { color: var(--accent); }
+  .stat.g .n { color: var(--green); }
+  .stat.p .n { color: var(--purple); }
+  .stat.t .n { color: var(--teal); }
+
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .09em;
+       color: var(--muted); margin: 22px 0 9px; font-weight: 600; }
+
+  /* ── Lists ────────────────────────────────────────────────────────────── */
+  .card { border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+          background: var(--panel); }
+  .rowline {
+    display: flex; align-items: center; gap: 11px; width: 100%; padding: 12px 14px;
+    border: 0; border-bottom: 1px solid var(--line); background: none;
+    color: var(--text); text-align: left; cursor: pointer; font-size: 13.5px;
+  }
+  .rowline:last-child { border-bottom: 0; }
+  .rowline:hover { background: var(--panel-2); }
+  .rowline .main { flex: 1; min-width: 0; }
+  .rowline .title { font-weight: 500; overflow: hidden; text-overflow: ellipsis;
+                    white-space: nowrap; }
+  .rowline .sub { font-size: 11.5px; color: var(--muted); font-family: var(--mono);
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rowline .right { flex: none; text-align: right; font-size: 12px; color: var(--muted); }
+
+  .avatar { width: 32px; height: 32px; border-radius: 50%; flex: none; display: grid;
+            place-items: center; font-size: 13px; font-weight: 600; color: #fff; }
+
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 20px; font-size: 10.5px;
+          font-weight: 600; vertical-align: 1px; }
+  .pill.wa { background: #25d366; color: #05391a; }
+  .pill.tg { background: #2aabee; color: #04283a; }
+  .pill.admin { background: var(--amber); color: #202124; }
+  .pill.reg { background: var(--accent-soft); color: var(--accent); }
+  .pill.qr { background: var(--green); color: #fff; }
+
+  .empty { padding: 30px 16px; color: var(--muted); text-align: center; font-size: 13px; }
+
+  /* ── Drawer ───────────────────────────────────────────────────────────── */
+  #drawer {
+    position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none;
+    z-index: 50; align-items: flex-end; justify-content: center;
+  }
+  #drawer.on { display: flex; }
+  .sheet {
+    background: var(--panel); width: 100%; max-width: 620px; max-height: 82vh;
+    border-radius: 16px 16px 0 0; overflow-y: auto; padding-bottom: 16px;
+  }
+  @media (min-width: 700px) {
+    #drawer { align-items: center; }
+    .sheet { border-radius: 16px; max-height: 78vh; }
+  }
+  .sheet-head {
+    position: sticky; top: 0; background: var(--panel); padding: 15px 16px 11px;
+    border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 11px;
+  }
+  .sheet-head .t { flex: 1; min-width: 0; }
+  .sheet-head .t b { display: block; overflow: hidden; text-overflow: ellipsis;
+                     white-space: nowrap; }
+  .sheet-head .t span { font-size: 11.5px; color: var(--muted); font-family: var(--mono);
+                        word-break: break-all; }
+  .x { border: 0; background: none; color: var(--muted); font-size: 22px; cursor: pointer; }
+
+  .btn { border: 0; border-radius: 7px; padding: 7px 13px; font-size: 12.5px;
+         cursor: pointer; font-weight: 500; }
+  .btn.danger { background: transparent; color: var(--red); border: 1px solid var(--red); }
+
+  #toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(80px);
+    background: #323639; color: #fff; padding: 11px 17px; border-radius: 9px;
+    font-size: 13px; transition: transform .22s; z-index: 60; opacity: 0; max-width: 90vw;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  #toast.err { background: var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span class="dot">📇</span> Directory</div>
+  <div class="spacer"></div>
+  <input type="search" id="search" placeholder="Search people..." autocomplete="off">
+  <a class="navlink" href="/">Tables ›</a>
+</header>
+
+<div class="tabs">
+  <button class="tab on" data-page="overview">Overview</button>
+  <button class="tab" data-page="chats">Chats</button>
+  <button class="tab" data-page="people">People</button>
+</div>
+
+<main>
+  <section class="page on" id="page-overview"></section>
+  <section class="page" id="page-chats"></section>
+  <section class="page" id="page-people"></section>
+</main>
+
+<div id="drawer"><div class="sheet" id="sheet"></div></div>
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { overview: null, chats: [], people: [], query: "" };
+
+function toast(msg, err) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = err ? "show err" : "show";
+  clearTimeout(t._t);
+  t._t = setTimeout(() => { t.className = ""; }, err ? 5000 : 2200);
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const d = await r.json().catch(() => ({ error: "Bad response" }));
+  if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+  return d;
+}
+
+/* A stable colour per id, so the same person looks the same everywhere. */
+function hueOf(s) {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) % 360;
+  return h;
+}
+function avatar(label, id) {
+  const el = document.createElement("div");
+  el.className = "avatar";
+  el.style.background = `hsl(${hueOf(id || label)} 55% 45%)`;
+  el.textContent = (label || "?").trim().charAt(0).toUpperCase();
+  return el;
+}
+function pill(text, cls) {
+  const s = document.createElement("span");
+  s.className = "pill " + cls;
+  s.textContent = text;
+  return s;
+}
+const tpill = (t) => pill(t === "whatsapp" ? "WA" : "TG", t === "whatsapp" ? "wa" : "tg");
+const nameOf = (m) => m.displayName || m.studentId || m.userId;
+const ago = (iso) => {
+  if (!iso) return "never";
+  const s = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (s < 90) return "just now";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  if (s < 172800) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+};
+
+// ── Overview ─────────────────────────────────────────────────────────────────
+
+async function renderOverview() {
+  const o = state.overview = await api("/api/directory/overview");
+  const host = $("page-overview");
+  host.innerHTML = "";
+
+  const stats = document.createElement("div");
+  stats.className = "stats";
+  const cards = [
+    ["a", o.groups, "Groups"],
+    ["g", o.people, "People seen"],
+    ["p", o.registered, "Registered"],
+    ["t", o.memberships, "Memberships"],
+  ];
+  for (const [cls, n, label] of cards) {
+    const d = document.createElement("div");
+    d.className = "stat " + cls;
+    d.innerHTML = '<div class="n"></div><div class="l"></div>';
+    d.querySelector(".n").textContent = n;
+    d.querySelector(".l").textContent = label;
+    stats.appendChild(d);
+  }
+  host.appendChild(stats);
+
+  if (o.people === 0) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.innerHTML = "Nothing harvested yet.<br>The WhatsApp bot sweeps its groups a few seconds after connecting.";
+    host.appendChild(e);
+    return;
+  }
+
+  const share = o.people > 0 ? Math.round((o.registered / o.people) * 100) : 0;
+  const note = document.createElement("div");
+  note.className = "empty";
+  note.style.textAlign = "left";
+  note.style.padding = "0 2px";
+  note.textContent = `${share}% of the people the bots can see have registered credentials.`;
+  host.appendChild(note);
+
+  if (o.byTransport.length) {
+    const h = document.createElement("h2");
+    h.textContent = "By platform";
+    host.appendChild(h);
+
+    const card = document.createElement("div");
+    card.className = "card";
+    for (const t of o.byTransport) {
+      const r = document.createElement("div");
+      r.className = "rowline";
+      r.style.cursor = "default";
+      const main = document.createElement("div");
+      main.className = "main";
+      const title = document.createElement("div");
+      title.className = "title";
+      title.appendChild(tpill(t.transport));
+      title.append(" " + t.transport);
+      main.appendChild(title);
+      const right = document.createElement("div");
+      right.className = "right";
+      right.textContent = `${t.chats} chat${t.chats === 1 ? "" : "s"} · ${t.people} people`;
+      r.appendChild(main);
+      r.appendChild(right);
+      card.appendChild(r);
+    }
+    host.appendChild(card);
+  }
+
+  const h2 = document.createElement("h2");
+  h2.textContent = "Biggest chats";
+  host.appendChild(h2);
+  const top = document.createElement("div");
+  top.className = "card";
+  const chats = state.chats.length ? state.chats : (await api("/api/directory/chats")).chats;
+  state.chats = chats;
+  for (const c of chats.slice(0, 5)) top.appendChild(chatRow(c));
+  host.appendChild(top.children.length ? top : Object.assign(document.createElement("div"),
+    { className: "empty", textContent: "No chats recorded." }));
+}
+
+// ── Chats ────────────────────────────────────────────────────────────────────
+
+function chatRow(c) {
+  const el = document.createElement("button");
+  el.className = "rowline";
+  const label = c.name || c.chatId;
+  el.appendChild(avatar(label, c.chatId));
+
+  const main = document.createElement("div");
+  main.className = "main";
+  const t = document.createElement("div");
+  t.className = "title";
+  t.appendChild(tpill(c.transport));
+  t.append(" " + label);
+  const sub = document.createElement("div");
+  sub.className = "sub";
+  sub.textContent = c.chatId;
+  main.appendChild(t);
+  main.appendChild(sub);
+
+  const right = document.createElement("div");
+  right.className = "right";
+  right.innerHTML = `<b>${c.memberCount}</b><br><span style="font-size:10.5px">members</span>`;
+
+  el.appendChild(main);
+  el.appendChild(right);
+  el.onclick = () => openChat(c);
+  return el;
+}
+
+async function renderChats() {
+  const host = $("page-chats");
+  host.innerHTML = "";
+  const { chats } = await api("/api/directory/chats");
+  state.chats = chats;
+
+  if (chats.length === 0) {
+    host.innerHTML = '<div class="empty">No chats recorded yet.</div>';
+    return;
+  }
+  const card = document.createElement("div");
+  card.className = "card";
+  for (const c of chats) card.appendChild(chatRow(c));
+  host.appendChild(card);
+}
+
+// ── People ───────────────────────────────────────────────────────────────────
+
+function personRow(m) {
+  const el = document.createElement("button");
+  el.className = "rowline";
+  el.appendChild(avatar(nameOf(m), m.userId));
+
+  const main = document.createElement("div");
+  main.className = "main";
+  const t = document.createElement("div");
+  t.className = "title";
+  t.appendChild(tpill(m.transport));
+  t.append(" " + nameOf(m) + " ");
+  if (m.studentId) t.appendChild(pill(m.hidden ? "hidden" : m.studentId, "reg"));
+  if (m.contributions > 0) t.appendChild(pill(m.contributions + " QR", "qr"));
+
+  const sub = document.createElement("div");
+  sub.className = "sub";
+  sub.textContent = m.userId;
+  main.appendChild(t);
+  main.appendChild(sub);
+
+  const right = document.createElement("div");
+  right.className = "right";
+  right.innerHTML = `<b>${m.chatCount}</b><br><span style="font-size:10.5px">chat${m.chatCount === 1 ? "" : "s"}</span>`;
+
+  el.appendChild(main);
+  el.appendChild(right);
+  el.onclick = () => openPerson(m);
+  return el;
+}
+
+async function renderPeople() {
+  const host = $("page-people");
+  host.innerHTML = '<div class="empty">Loading...</div>';
+  const q = state.query ? "?q=" + encodeURIComponent(state.query) : "";
+  const { people } = await api("/api/directory/people" + q);
+  state.people = people;
+
+  host.innerHTML = "";
+  if (people.length === 0) {
+    host.innerHTML = '<div class="empty">' +
+      (state.query ? "Nobody matches that." : "Nobody recorded yet.") + "</div>";
+    return;
+  }
+  const h = document.createElement("h2");
+  h.textContent = people.length + " people";
+  h.style.margin = "0 0 9px";
+  host.appendChild(h);
+
+  const card = document.createElement("div");
+  card.className = "card";
+  for (const m of people) card.appendChild(personRow(m));
+  host.appendChild(card);
+}
+
+// ── Drawer ───────────────────────────────────────────────────────────────────
+
+function closeDrawer() { $("drawer").classList.remove("on"); }
+$("drawer").onclick = (e) => { if (e.target.id === "drawer") closeDrawer(); };
+
+function sheetHead(title, subtitle, id) {
+  const head = document.createElement("div");
+  head.className = "sheet-head";
+  head.appendChild(avatar(title, id || title));
+  const t = document.createElement("div");
+  t.className = "t";
+  const b = document.createElement("b");
+  b.textContent = title;
+  const s = document.createElement("span");
+  s.textContent = subtitle;
+  t.appendChild(b); t.appendChild(s);
+  const x = document.createElement("button");
+  x.className = "x";
+  x.textContent = "×";
+  x.onclick = closeDrawer;
+  head.appendChild(t); head.appendChild(x);
+  return head;
+}
+
+async function openChat(c) {
+  const sheet = $("sheet");
+  sheet.innerHTML = "";
+  sheet.appendChild(sheetHead(c.name || c.chatId, c.chatId, c.chatId));
+  $("drawer").classList.add("on");
+
+  const body = document.createElement("div");
+  body.innerHTML = '<div class="empty">Loading members...</div>';
+  sheet.appendChild(body);
+
+  try {
+    const { members } = await api(
+      `/api/directory/members?chat=${encodeURIComponent(c.chatId)}&transport=${encodeURIComponent(c.transport)}`);
+    body.innerHTML = "";
+
+    const bar = document.createElement("div");
+    bar.style.cssText = "padding:11px 16px;display:flex;gap:8px;align-items:center";
+    const count = document.createElement("span");
+    count.style.cssText = "flex:1;font-size:12px;color:var(--muted)";
+    const registered = members.filter(m => m.studentId).length;
+    count.textContent = `${members.length} members · ${registered} registered`;
+    const forget = document.createElement("button");
+    forget.className = "btn danger";
+    forget.textContent = "Forget chat";
+    forget.onclick = async () => {
+      if (!confirm(`Remove ${c.name || c.chatId} and its ${members.length} member records?\n\nCredentials are not affected.`)) return;
+      try {
+        await api("/api/directory/forget", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ chat: c.chatId, transport: c.transport }),
+        });
+        toast("Forgotten");
+        closeDrawer();
+        await refresh();
+      } catch (e) { toast(e.message, true); }
+    };
+    bar.appendChild(count); bar.appendChild(forget);
+    body.appendChild(bar);
+
+    for (const m of members) {
+      const el = document.createElement("button");
+      el.className = "rowline";
+      el.appendChild(avatar(nameOf(m), m.userId));
+      const main = document.createElement("div");
+      main.className = "main";
+      const t = document.createElement("div");
+      t.className = "title";
+      t.append(nameOf(m) + " ");
+      if (m.isAdmin) t.appendChild(pill("admin", "admin"));
+      if (m.studentId) t.appendChild(pill(m.hidden ? "hidden" : m.studentId, "reg"));
+      const sub = document.createElement("div");
+      sub.className = "sub";
+      sub.textContent = m.userId;
+      main.appendChild(t); main.appendChild(sub);
+      const right = document.createElement("div");
+      right.className = "right";
+      right.textContent = m.lastSpoke ? "spoke " + ago(m.lastSpoke) : "silent";
+      el.appendChild(main); el.appendChild(right);
+      el.onclick = () => openPerson(m);
+      body.appendChild(el);
+    }
+  } catch (e) {
+    body.innerHTML = "";
+    const err = document.createElement("div");
+    err.className = "empty";
+    err.textContent = e.message;
+    body.appendChild(err);
+  }
+}
+
+async function openPerson(m) {
+  const sheet = $("sheet");
+  sheet.innerHTML = "";
+  sheet.appendChild(sheetHead(nameOf(m), m.userId, m.userId));
+  $("drawer").classList.add("on");
+
+  const facts = document.createElement("div");
+  facts.style.cssText = "padding:12px 16px;font-size:13px;line-height:1.9";
+  const rows = [
+    ["Platform", m.transport],
+    ["Student id", m.studentId ? (m.hidden ? m.studentId + " (hidden)" : m.studentId) : "not registered"],
+    ["QR contributions", String(m.contributions)],
+    ["Last spoke", m.lastSpoke ? ago(m.lastSpoke) : "never seen speaking"],
+    ["First seen", ago(m.firstSeen)],
+  ];
+  for (const [k, v] of rows) {
+    const line = document.createElement("div");
+    const kk = document.createElement("span");
+    kk.style.cssText = "color:var(--muted);display:inline-block;min-width:130px";
+    kk.textContent = k;
+    line.appendChild(kk);
+    line.append(v);
+    facts.appendChild(line);
+  }
+  sheet.appendChild(facts);
+
+  const h = document.createElement("h2");
+  h.textContent = "Shared chats";
+  h.style.padding = "0 16px";
+  sheet.appendChild(h);
+
+  const body = document.createElement("div");
+  body.innerHTML = '<div class="empty">Loading...</div>';
+  sheet.appendChild(body);
+
+  try {
+    const { chats } = await api("/api/directory/person?user=" + encodeURIComponent(m.userId));
+    body.innerHTML = "";
+    if (chats.length === 0) {
+      body.innerHTML = '<div class="empty">None recorded.</div>';
+      return;
+    }
+    for (const c of chats) body.appendChild(chatRow(c));
+  } catch (e) {
+    body.innerHTML = "";
+    const err = document.createElement("div");
+    err.className = "empty";
+    err.textContent = e.message;
+    body.appendChild(err);
+  }
+}
+
+// ── Wiring ───────────────────────────────────────────────────────────────────
+
+let current = "overview";
+for (const t of document.querySelectorAll(".tab")) {
+  t.onclick = async () => {
+    for (const x of document.querySelectorAll(".tab")) x.classList.remove("on");
+    t.classList.add("on");
+    current = t.dataset.page;
+    for (const p of document.querySelectorAll(".page")) p.classList.remove("on");
+    $("page-" + current).classList.add("on");
+    try { await render(current); } catch (e) { toast(e.message, true); }
+  };
+}
+
+async function render(page) {
+  if (page === "overview") return renderOverview();
+  if (page === "chats") return renderChats();
+  if (page === "people") return renderPeople();
+}
+
+async function refresh() {
+  try { await render(current); } catch (e) { toast(e.message, true); }
+}
+
+let timer;
+$("search").oninput = (e) => {
+  clearTimeout(timer);
+  timer = setTimeout(() => {
+    state.query = e.target.value.trim();
+    // Searching is about people, so jump there rather than filtering in place
+    if (current !== "people") document.querySelector('.tab[data-page="people"]').click();
+    else renderPeople().catch(err => toast(err.message, true));
+  }, 260);
+};
+
+refresh();
+</script>
+</body>
+</html>

@@ -14,6 +14,8 @@ import {
 import {
     resolveDocId as resolveDocIdShared, resolveOwnDocId,
 } from "../../../shared/hi-hive/creds.js";
+import { rememberIdentity, labelFor as rankLabel } from "../../../shared/hi-hive/identity.js";
+import { noteSpoke } from "../../../shared/messaging/directory.js";
 
 export interface Creds
 {
@@ -105,6 +107,16 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
     ownerId stays the raw jid because it records who acted.
     */
     const selfDoc: string = await resolveOwnDocId(ctx.userId);
+
+    /*
+    Learn who this is from the message that is already here. WhatsApp puts the
+    sender's chosen name on every message, so no lookup and nothing sent - and
+    it only updates a row that already exists, so seeing a stranger speak never
+    creates credentials.
+    */
+    void rememberIdentity(ctx.userId, ctx.pushName);
+    // Census: a DM never shows up in a group harvest, so record it here too
+    void noteSpoke(ctx.chatId, ctx.userId, 'whatsapp', ctx.pushName);
     const params: string[] = ctx.args;
 
     // Every reply in this command goes through the outbox
@@ -665,7 +677,8 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
                     const total: number = rows.reduce((sum, r) => sum + r.contributions, 0);
 
                     const lines: string[] = rows.map((r, i) => {
-                        const name: string = r.hidden ? 'Hidden User' : r.studentId;
+                        // Prefer the chat name we have seen; fall back to the student id
+                        const name: string = rankLabel(r);
                         const share: string = ((r.contributions / total) * 100).toFixed(0);
                         return `${medal(i)} \`${name}\` — *${r.contributions}* QR${r.contributions === 1 ? '' : 's'} _(${share}%)_`;
                     });

@@ -17,6 +17,7 @@ import { processMediaDownload } from "./commands/play.js";
 import { startBirthdayScheduler } from "./commands/birthday.js";
 import { activeSearches, savedPollMessages } from "./memory.js";
 import { startScheduleService } from "./commands/schedule.js";
+import { startHarvester } from "./lib/harvest.js";
 import { tryAutoScan } from "./lib/hi-hive/auto-scan.js";
 import { startScanBufferService } from "../../shared/hi-hive/scan-buffer-service.js";
 import { startWebhookQueue } from "../../shared/webhook/webhook-queue.js";
@@ -109,6 +110,8 @@ async function startBot() {
             console.log("🟢 Bot is online and ready!");
             startBirthdayScheduler(sock);
             startScheduleService(sock);
+            // One membership sweep, then event-driven refreshes. See lib/harvest.ts.
+            startHarvester(sock);
             void startWebhookQueue().catch(err =>
                 // Firebase is optional; the rest of the bot must still run
                 console.warn("🪝 GitHub webhook queue not started:", err?.message ?? err));

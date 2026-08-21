@@ -129,6 +129,26 @@
   .val.readonly { cursor: not-allowed; opacity: .65; }
   .val.readonly:hover { border-color: transparent; background: none; }
 
+  /* Row-level action bar, pinned under the breadcrumb so it never needs a scroll */
+  .row-actions {
+    display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+    padding: 9px 16px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+  }
+  .row-actions .grow { flex: 1; }
+
+  select.edit, input.edit {
+    width: 100%; font-family: var(--mono); font-size: 13px;
+    padding: 8px; border-radius: 6px; border: 2px solid var(--accent);
+    background: var(--bg); color: var(--text);
+  }
+  select.edit { font-family: -apple-system, sans-serif; }
+  .seg { display: flex; border: 2px solid var(--accent); border-radius: 7px; overflow: hidden; }
+  .seg button {
+    flex: 1; border: 0; padding: 9px 6px; font-size: 13px; cursor: pointer;
+    background: var(--bg); color: var(--text); font-family: var(--mono);
+  }
+  .seg button.on { background: var(--accent); color: #fff; font-weight: 600; }
+
   textarea.edit {
     width: 100%; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
     padding: 7px; border-radius: 6px; border: 2px solid var(--accent);
@@ -196,6 +216,7 @@
       <span class="count" id="fields-count"></span>
     </div>
     <div class="doc-path" id="path"></div>
+    <div class="row-actions" id="row-actions" hidden></div>
     <div class="pane-body" id="fields">
       <div class="empty">Pick a table, then a row.</div>
     </div>
@@ -259,10 +280,16 @@ function classify(value, type) {
   return "str";
 }
 
-function display(value, type) {
+function display(value, type, col) {
   if (value === null || value === undefined) return "null";
   if (type === "jsonb" || type === "json" || typeof value === "object") {
     return JSON.stringify(value, null, 2);
+  }
+  // An epoch is unreadable on its own; show the date and keep the number
+  if (col && col.isEpochMs) {
+    const d = new Date(Number(value));
+    if (!isNaN(d.getTime())) return `${d.toLocaleString()}
+(${value})`;
   }
   return String(value);
 }
@@ -307,6 +334,7 @@ async function selectTable(name, keepPage) {
   state.row = null;
   $("fields").innerHTML = '<div class="empty">Pick a row.</div>';
   $("path").textContent = "";
+  $("row-actions").hidden = true;
   $("fields-count").textContent = "";
 
   await loadRows(name);
@@ -388,8 +416,52 @@ function selectRow(row) {
   $("path").appendChild(path);
 
   $("fields-count").textContent = state.table.columns.length + " fields";
+  renderRowActions();
   renderFields();
   showPane("fields");
+}
+
+/*
+Row-level actions live in a bar under the breadcrumb, not at the end of the
+field list. A wide table pushed "Delete this row" below the fold, so the one
+destructive action was also the one you had to hunt for - and on a phone that
+meant scrolling past every field to reach it.
+*/
+function renderRowActions() {
+  const bar = $("row-actions");
+  bar.innerHTML = "";
+
+  if (!state.row || state.table.primaryKey.length === 0) {
+    bar.hidden = true;
+    return;
+  }
+  bar.hidden = false;
+
+  const copy = document.createElement("button");
+  copy.className = "btn plain";
+  copy.textContent = "Copy JSON";
+  copy.onclick = async () => {
+    const text = JSON.stringify(state.row, null, 2);
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Row copied");
+    } catch {
+      // clipboard needs a secure context; plain http on a phone is not one
+      toast("Clipboard blocked - long-press a value to copy instead", true);
+    }
+  };
+
+  const del = document.createElement("button");
+  del.className = "btn danger";
+  del.textContent = "Delete row";
+  del.onclick = deleteRow;
+
+  const spacer = document.createElement("span");
+  spacer.className = "grow";
+
+  bar.appendChild(copy);
+  bar.appendChild(spacer);
+  bar.appendChild(del);
 }
 
 function renderFields() {
@@ -422,7 +494,7 @@ function renderFields() {
     const readonly = col.isPrimaryKey || state.table.primaryKey.length === 0;
     const valEl = document.createElement("div");
     valEl.className = "val " + classify(value, col.type) + (readonly ? " readonly" : "");
-    valEl.textContent = display(value, col.type);
+    valEl.textContent = display(value, col.type, col);
     if (!readonly) valEl.onclick = () => beginEdit(wrap, valWrap, col, value);
     valWrap.appendChild(valEl);
 
@@ -431,40 +503,242 @@ function renderFields() {
     host.appendChild(wrap);
   }
 
-  if (state.table.primaryKey.length > 0) {
-    const foot = document.createElement("div");
-    foot.style.padding = "14px 16px";
-    const del = document.createElement("button");
-    del.className = "btn danger";
-    del.textContent = "Delete this row";
-    del.onclick = deleteRow;
-    foot.appendChild(del);
-    host.appendChild(foot);
-  }
+}
+
+/*
+Build the right control for the column's type.
+
+A text box for everything is how this started, and it is the wrong shape for
+most of what is in here: booleans become a spelling test, timestamps make you
+hand-write ISO strings, and columns that are really enums give you no clue what
+the valid values are. Each type gets the input that matches it.
+*/
+function pad2(n) { return String(n).padStart(2, "0"); }
+
+function toLocalInput(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}` +
+         `T${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
 function beginEdit(wrap, valWrap, col, value) {
   valWrap.innerHTML = "";
 
-  const ta = document.createElement("textarea");
-  ta.className = "edit";
-  ta.value = value === null || value === undefined ? "" : display(value, col.type);
-  if (col.type === "jsonb" || col.type === "json") ta.rows = 10;
-  valWrap.appendChild(ta);
-
+  const type = col.type;
   const actions = document.createElement("div");
   actions.className = "edit-actions";
+
+  let read;      // () => string to send, or null for SQL NULL
+  let control;
+
+  if (type === "boolean") {
+    // Two buttons rather than a dropdown: one tap, and the current value is visible
+    const seg = document.createElement("div");
+    seg.className = "seg";
+    let current = value === null || value === undefined ? null : Boolean(value);
+    for (const opt of [true, false]) {
+      const b = document.createElement("button");
+      b.textContent = String(opt);
+      b.className = current === opt ? "on" : "";
+      b.onclick = () => {
+        current = opt;
+        for (const x of seg.children) x.className = "";
+        b.className = "on";
+      };
+      seg.appendChild(b);
+    }
+    control = seg;
+    read = () => (current === null ? null : String(current));
+
+  } else if (type.startsWith("timestamp") || type === "date" || type.startsWith("time ")) {
+    /*
+    datetime-local speaks "YYYY-MM-DDTHH:mm:ss" in LOCAL time with no zone, but
+    the column is timestamptz. Converting both ways through Date means the
+    picker shows the wall-clock time you expect while what gets stored is a real
+    instant.
+    */
+    const inp = document.createElement("input");
+    inp.className = "edit";
+    inp.type = type === "date" ? "date" : (type.startsWith("time ") ? "time" : "datetime-local");
+    if (inp.type === "datetime-local") inp.step = "1";
+
+    if (value !== null && value !== undefined) {
+      const d = new Date(value);
+      if (!isNaN(d.getTime())) {
+        const local = toLocalInput(d);
+        inp.value = inp.type === "date" ? local.slice(0, 10)
+                  : inp.type === "time" ? local.slice(11)
+                  : local;
+      }
+    }
+    control = inp;
+    read = () => {
+      if (!inp.value) return null;
+      if (inp.type === "datetime-local") return new Date(inp.value).toISOString();
+      return inp.value;
+    };
+
+    const now = document.createElement("button");
+    now.className = "btn plain";
+    now.textContent = "Now";
+    now.onclick = () => {
+      const local = toLocalInput(new Date());
+      inp.value = inp.type === "date" ? local.slice(0, 10)
+                : inp.type === "time" ? local.slice(11)
+                : local;
+    };
+    actions.appendChild(now);
+
+  } else if (col.isEpochMs) {
+    /*
+    A bigint holding Date.now(). Shown as a date picker, because working out an
+    epoch by hand to reschedule a reminder is not a thing anyone should do. The
+    raw number stays one tap away for when the exact value matters.
+    */
+    const inp = document.createElement("input");
+    inp.className = "edit";
+    inp.type = "datetime-local";
+    inp.step = "1";
+    if (value !== null && value !== undefined && String(value) !== "") {
+      const d = new Date(Number(value));
+      if (!isNaN(d.getTime())) inp.value = toLocalInput(d);
+    }
+
+    const raw = document.createElement("input");
+    raw.className = "edit";
+    raw.type = "text";
+    raw.inputMode = "numeric";
+    raw.style.marginTop = "7px";
+    raw.hidden = true;
+    raw.value = value === null || value === undefined ? "" : String(value);
+
+    const box = document.createElement("div");
+    box.appendChild(inp);
+    box.appendChild(raw);
+    control = box;
+
+    let useRaw = false;
+    read = () => {
+      if (useRaw) return raw.value.trim() === "" ? null : raw.value.trim();
+      return inp.value ? String(new Date(inp.value).getTime()) : null;
+    };
+
+    const toggle = document.createElement("button");
+    toggle.className = "btn plain";
+    toggle.textContent = "Raw ms";
+    toggle.onclick = () => {
+      useRaw = !useRaw;
+      // Carry the current value across so switching never silently loses an edit
+      if (useRaw && inp.value) raw.value = String(new Date(inp.value).getTime());
+      else if (!useRaw && raw.value) {
+        const d = new Date(Number(raw.value));
+        if (!isNaN(d.getTime())) inp.value = toLocalInput(d);
+      }
+      raw.hidden = !useRaw;
+      inp.hidden = useRaw;
+      toggle.textContent = useRaw ? "Pick date" : "Raw ms";
+    };
+    actions.appendChild(toggle);
+
+    const now = document.createElement("button");
+    now.className = "btn plain";
+    now.textContent = "Now";
+    now.onclick = () => {
+      const d = new Date();
+      inp.value = toLocalInput(d);
+      raw.value = String(d.getTime());
+    };
+    actions.appendChild(now);
+
+  } else if (["integer", "smallint", "bigint", "numeric", "real", "double precision"].includes(type)) {
+    const inp = document.createElement("input");
+    inp.className = "edit";
+    /*
+    bigint stays a text field on purpose. type=number routes the value through a
+    JS double, which silently rounds anything past 2^53 - and Telegram user ids
+    and WhatsApp lids live in exactly that range.
+    */
+    if (type === "bigint") {
+      inp.type = "text";
+      inp.inputMode = "numeric";
+    } else {
+      inp.type = "number";
+      if (type === "integer" || type === "smallint") inp.step = "1";
+    }
+    inp.value = value === null || value === undefined ? "" : String(value);
+    control = inp;
+    read = () => (inp.value.trim() === "" ? null : inp.value.trim());
+
+  } else if (type === "jsonb" || type === "json") {
+    const ta = document.createElement("textarea");
+    ta.className = "edit";
+    ta.rows = 12;
+    ta.value = value === null || value === undefined ? "" : JSON.stringify(value, null, 2);
+    control = ta;
+    read = () => (ta.value.trim() === "" ? null : ta.value);
+
+    const fmt = document.createElement("button");
+    fmt.className = "btn plain";
+    fmt.textContent = "Format";
+    fmt.onclick = () => {
+      try {
+        ta.value = JSON.stringify(JSON.parse(ta.value), null, 2);
+        toast("Valid JSON");
+      } catch (e) {
+        toast(e.message, true);
+      }
+    };
+    actions.appendChild(fmt);
+
+  } else {
+    /*
+    Text. Offer the values already present in this column when there are few
+    enough of them: that turns columns which are really enums - transport,
+    status - into a pick list, without hardcoding anywhere what the choices are.
+    */
+    const ta = document.createElement("textarea");
+    ta.className = "edit";
+    ta.rows = 3;
+    ta.value = value === null || value === undefined ? "" : String(value);
+    control = ta;
+    read = () => (ta.value === "" ? null : ta.value);
+
+    fetch(`/api/distinct/${state.table.name}/${col.name}`)
+      .then(r => r.json())
+      .then(d => {
+        if (!d.values || d.values.length === 0 || !valWrap.contains(ta)) return;
+        const sel = document.createElement("select");
+        sel.className = "edit";
+        sel.style.marginTop = "7px";
+        const first = document.createElement("option");
+        first.value = "";
+        first.textContent = "- existing values -";
+        sel.appendChild(first);
+        for (const v of d.values) {
+          const o = document.createElement("option");
+          o.value = v;
+          o.textContent = v;
+          sel.appendChild(o);
+        }
+        sel.onchange = () => { if (sel.value) ta.value = sel.value; };
+        ta.insertAdjacentElement("afterend", sel);
+      })
+      .catch(() => {});
+  }
+
+  valWrap.appendChild(control);
 
   const save = document.createElement("button");
   save.className = "btn primary";
   save.textContent = "Save";
+  save.onclick = () => commit(col, read());
 
   const cancel = document.createElement("button");
   cancel.className = "btn plain";
   cancel.textContent = "Cancel";
+  cancel.onclick = () => renderFields();
 
-  actions.appendChild(save);
-  actions.appendChild(cancel);
+  actions.prepend(cancel);
+  actions.prepend(save);
 
   if (col.nullable) {
     const nul = document.createElement("button");
@@ -476,16 +750,15 @@ function beginEdit(wrap, valWrap, col, value) {
 
   const hint = document.createElement("span");
   hint.className = "hint";
-  hint.textContent = (col.type === "jsonb" || col.type === "json")
-    ? "Must be valid JSON."
+  hint.textContent =
+      (type === "jsonb" || type === "json") ? "Must be valid JSON."
+    : type === "bigint" ? "Whole numbers only, kept exact."
+    : type.startsWith("timestamp") ? "Shown in this device's timezone."
     : (col.nullable ? "Empty means null." : "");
   actions.appendChild(hint);
 
   valWrap.appendChild(actions);
-  ta.focus();
-
-  cancel.onclick = () => renderFields();
-  save.onclick = () => commit(col, ta.value);
+  if (control.focus) control.focus();
 }
 
 async function commit(col, raw) {
@@ -525,6 +798,7 @@ async function deleteRow() {
     state.row = null;
     $("fields").innerHTML = '<div class="empty">Row deleted.</div>';
     $("path").textContent = "";
+    $("row-actions").hidden = true;
     await loadRows(state.table.name);
     await loadTables(true);
     showPane("rows");
