@@ -107,6 +107,27 @@
 
   .empty { padding: 30px 16px; color: var(--muted); text-align: center; font-size: 13px; }
 
+  /* ── Filter bar ───────────────────────────────────────────────────────── */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+             margin-bottom: 14px; }
+  .chipgroup { display: flex; border: 1px solid var(--line); border-radius: 20px;
+               overflow: hidden; }
+  .chip {
+    border: 0; background: var(--panel); color: var(--muted); cursor: pointer;
+    padding: 6px 12px; font-size: 12px; font-weight: 500; white-space: nowrap;
+    border-right: 1px solid var(--line);
+  }
+  .chip:last-child { border-right: 0; }
+  .chip.on { background: var(--accent); color: #fff; }
+  .chip.toggle { border-radius: 20px; border: 1px solid var(--line); }
+  .chip.toggle.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .filter-count { font-size: 11.5px; color: var(--muted); margin-left: auto; }
+
+  .name-unknown { color: var(--muted); font-style: italic; }
+  .id-hint { font-family: var(--mono); font-size: 10.5px; color: var(--muted);
+             margin-left: 5px; }
+
+
   /* ── Drawer ───────────────────────────────────────────────────────────── */
   #drawer {
     position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none;
@@ -171,7 +192,11 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { overview: null, chats: [], people: [], query: "" };
+const state = {
+  overview: null, chats: [], people: [], query: "",
+  chatFilter: { sort: "recent", transport: "all", kind: "all", registered: "all" },
+  peopleFilter: { sort: "recent", transport: "all", registered: "all", spoken: "all" },
+};
 
 function toast(msg, err) {
   const t = $("toast");
@@ -208,7 +233,53 @@ function pill(text, cls) {
   return s;
 }
 const tpill = (t) => pill(t === "whatsapp" ? "WA" : "TG", t === "whatsapp" ? "wa" : "tg");
-const nameOf = (m) => m.displayName || m.studentId || m.userId;
+const nameOf = (m) => m.displayName || m.studentId || null;
+
+/*
+Short, recognisable id text for someone with no known name.
+
+A full jid ("210977484189809@lid") is 20+ characters that mean nothing at a
+glance. The tail of the number is at least distinguishable from other unnamed
+entries at a glance without reading the whole string.
+*/
+function shortId(id) {
+  const local = String(id).split("@")[0];
+  if (local.length <= 14) return local;
+  /*
+  Keep a wide head plus the tail, rather than a narrow slice of each end.
+
+  Tail-only collapsed a run of lids ending in zeros into an identical
+  "…000000". A narrow 4-and-4 window then still collided for ids that differ
+  only in their middle digits. Since ids of the same kind share a prefix
+  length, keeping more of the head is what actually separates them - and the
+  full id sits on the line underneath regardless.
+  */
+  return local.slice(0, 8) + "…" + local.slice(-4);
+}
+
+/* Fills the title with a name if one is known, or a clearly-marked fallback. */
+function nameNode(m) {
+  const frag = document.createDocumentFragment();
+  const known = nameOf(m);
+  if (known) {
+    frag.append(known + " ");
+  } else {
+    const span = document.createElement("span");
+    span.className = "name-unknown";
+    span.textContent = "Unnamed";
+    frag.appendChild(span);
+    const hint = document.createElement("span");
+    hint.className = "id-hint";
+    hint.textContent = shortId(m.userId);
+    frag.appendChild(hint);
+    frag.append(" ");
+  }
+  return frag;
+}
+
+/** Plain-text version of the name, for contexts that cannot hold markup. */
+const titleOf = (m) => nameOf(m) || `Unnamed (${shortId(m.userId)})`;
+
 const ago = (iso) => {
   if (!iso) return "never";
   const s = (Date.now() - new Date(iso).getTime()) / 1000;
@@ -301,6 +372,41 @@ async function renderOverview() {
 
 // ── Chats ────────────────────────────────────────────────────────────────────
 
+/*
+Chip-group filter bar, shared by Chats and People.
+
+`groups` is [{key, options: [{value, label}]}]; the caller reads back
+`state[stateKey][key]` and re-renders on change. Kept generic rather than two
+near-identical bars, since the two tabs' filters differ only in vocabulary.
+*/
+function filterBar(groups, stateKey, onChange) {
+  const bar = document.createElement("div");
+  bar.className = "filters";
+
+  for (const g of groups) {
+    const cg = document.createElement("div");
+    cg.className = "chipgroup";
+    for (const opt of g.options) {
+      const b = document.createElement("button");
+      b.className = "chip" + (state[stateKey][g.key] === opt.value ? " on" : "");
+      b.textContent = opt.label;
+      b.onclick = () => {
+        state[stateKey][g.key] = opt.value;
+        onChange();
+      };
+      cg.appendChild(b);
+    }
+    bar.appendChild(cg);
+  }
+
+  const count = document.createElement("span");
+  count.className = "filter-count";
+  count.id = stateKey + "-count";
+  bar.appendChild(count);
+
+  return bar;
+}
+
 function chatRow(c) {
   const el = document.createElement("button");
   el.className = "rowline";
@@ -312,7 +418,8 @@ function chatRow(c) {
   const t = document.createElement("div");
   t.className = "title";
   t.appendChild(tpill(c.transport));
-  t.append(" " + label);
+  t.append(" " + label + " ");
+  if (c.registeredCount > 0) t.appendChild(pill(c.registeredCount + " reg", "reg"));
   const sub = document.createElement("div");
   sub.className = "sub";
   sub.textContent = c.chatId;
@@ -321,7 +428,7 @@ function chatRow(c) {
 
   const right = document.createElement("div");
   right.className = "right";
-  right.innerHTML = `<b>${c.memberCount}</b><br><span style="font-size:10.5px">members</span>`;
+  right.innerHTML = `<b>${c.memberCount}</b><br><span style="font-size:10.5px">${ago(c.lastActivity)}</span>`;
 
   el.appendChild(main);
   el.appendChild(right);
@@ -329,19 +436,76 @@ function chatRow(c) {
   return el;
 }
 
+/* Apply the Chats filter bar's chip state to an already-fetched list. */
+function applyChatFilter(chats) {
+  const f = state.chatFilter;
+  let out = chats;
+
+  if (f.transport !== "all") out = out.filter(c => c.transport === f.transport);
+  if (f.kind !== "all") out = out.filter(c => c.kind === f.kind);
+  if (f.registered === "yes") out = out.filter(c => c.registeredCount > 0);
+  if (f.registered === "no") out = out.filter(c => c.registeredCount === 0);
+
+  if (state.query) {
+    const q = state.query.toLowerCase();
+    out = out.filter(c =>
+      (c.name || "").toLowerCase().includes(q) || c.chatId.toLowerCase().includes(q));
+  }
+
+  out = out.slice().sort((a, b) => {
+    if (f.sort === "members") return b.memberCount - a.memberCount;
+    if (f.sort === "name") return (a.name || a.chatId).localeCompare(b.name || b.chatId);
+    return new Date(b.lastActivity) - new Date(a.lastActivity);   // recent, default
+  });
+  return out;
+}
+
 async function renderChats() {
   const host = $("page-chats");
   host.innerHTML = "";
-  const { chats } = await api("/api/directory/chats");
-  state.chats = chats;
 
-  if (chats.length === 0) {
-    host.innerHTML = '<div class="empty">No chats recorded yet.</div>';
+  if (state.chats.length === 0) {
+    const { chats } = await api("/api/directory/chats");
+    state.chats = chats;
+  }
+
+  const bar = filterBar([
+    { key: "sort", options: [
+      { value: "recent", label: "Recent" },
+      { value: "members", label: "Most members" },
+      { value: "name", label: "Name" },
+    ]},
+    { key: "transport", options: [
+      { value: "all", label: "All" },
+      { value: "whatsapp", label: "WhatsApp" },
+      { value: "telegram", label: "Telegram" },
+    ]},
+    { key: "kind", options: [
+      { value: "all", label: "Any kind" },
+      { value: "group", label: "Groups" },
+      { value: "dm", label: "DMs" },
+    ]},
+    { key: "registered", options: [
+      { value: "all", label: "Any" },
+      { value: "yes", label: "Has registered" },
+      { value: "no", label: "None registered" },
+    ]},
+  ], "chatFilter", () => renderChats());
+  host.appendChild(bar);
+
+  const filtered = applyChatFilter(state.chats);
+  $("chatFilter-count").textContent = `${filtered.length} / ${state.chats.length}`;
+
+  if (filtered.length === 0) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = state.chats.length === 0 ? "No chats recorded yet." : "Nothing matches these filters.";
+    host.appendChild(e);
     return;
   }
   const card = document.createElement("div");
   card.className = "card";
-  for (const c of chats) card.appendChild(chatRow(c));
+  for (const c of filtered) card.appendChild(chatRow(c));
   host.appendChild(card);
 }
 
@@ -350,14 +514,15 @@ async function renderChats() {
 function personRow(m) {
   const el = document.createElement("button");
   el.className = "rowline";
-  el.appendChild(avatar(nameOf(m), m.userId));
+  el.appendChild(avatar(nameOf(m) || shortId(m.userId), m.userId));
 
   const main = document.createElement("div");
   main.className = "main";
   const t = document.createElement("div");
   t.className = "title";
   t.appendChild(tpill(m.transport));
-  t.append(" " + nameOf(m) + " ");
+  t.append(" ");
+  t.appendChild(nameNode(m));
   if (m.studentId) t.appendChild(pill(m.hidden ? "hidden" : m.studentId, "reg"));
   if (m.contributions > 0) t.appendChild(pill(m.contributions + " QR", "qr"));
 
@@ -369,7 +534,9 @@ function personRow(m) {
 
   const right = document.createElement("div");
   right.className = "right";
-  right.innerHTML = `<b>${m.chatCount}</b><br><span style="font-size:10.5px">chat${m.chatCount === 1 ? "" : "s"}</span>`;
+  // Recency is the thing you actually scan for; the chat count is secondary
+  right.innerHTML = `<b>${m.lastSpoke ? ago(m.lastSpoke) : "—"}</b>` +
+                    `<br><span style="font-size:10.5px">${m.chatCount} chat${m.chatCount === 1 ? "" : "s"}</span>`;
 
   el.appendChild(main);
   el.appendChild(right);
@@ -377,27 +544,82 @@ function personRow(m) {
   return el;
 }
 
+/* Apply the People filter bar's chip state to an already-fetched list. */
+function applyPeopleFilter(people) {
+  const f = state.peopleFilter;
+  let out = people;
+
+  if (f.transport !== "all") out = out.filter(m => m.transport === f.transport);
+  if (f.registered === "yes") out = out.filter(m => m.studentId);
+  if (f.registered === "no") out = out.filter(m => !m.studentId);
+  if (f.spoken === "yes") out = out.filter(m => m.lastSpoke);
+  if (f.spoken === "never") out = out.filter(m => !m.lastSpoke);
+  if (f.spoken === "unnamed") out = out.filter(m => !nameOf(m));
+
+  out = out.slice().sort((a, b) => {
+    if (f.sort === "chats") return b.chatCount - a.chatCount;
+    if (f.sort === "qr") return b.contributions - a.contributions;
+    if (f.sort === "name") return titleOf(a).localeCompare(titleOf(b));
+    // recent, default: anyone who has never spoken sorts last rather than first
+    const at = a.lastSpoke ? new Date(a.lastSpoke).getTime() : -Infinity;
+    const bt = b.lastSpoke ? new Date(b.lastSpoke).getTime() : -Infinity;
+    return bt - at;
+  });
+  return out;
+}
+
 async function renderPeople() {
   const host = $("page-people");
   host.innerHTML = '<div class="empty">Loading...</div>';
+
   const q = state.query ? "?q=" + encodeURIComponent(state.query) : "";
   const { people } = await api("/api/directory/people" + q);
   state.people = people;
 
   host.innerHTML = "";
-  if (people.length === 0) {
-    host.innerHTML = '<div class="empty">' +
-      (state.query ? "Nobody matches that." : "Nobody recorded yet.") + "</div>";
+
+  const bar = filterBar([
+    { key: "sort", options: [
+      { value: "recent", label: "Recent" },
+      { value: "chats", label: "Most chats" },
+      { value: "qr", label: "Top QR" },
+      { value: "name", label: "Name" },
+    ]},
+    { key: "transport", options: [
+      { value: "all", label: "All" },
+      { value: "whatsapp", label: "WhatsApp" },
+      { value: "telegram", label: "Telegram" },
+    ]},
+    { key: "registered", options: [
+      { value: "all", label: "Any" },
+      { value: "yes", label: "Registered" },
+      { value: "no", label: "Not registered" },
+    ]},
+    { key: "spoken", options: [
+      { value: "all", label: "Everyone" },
+      { value: "yes", label: "Has spoken" },
+      { value: "never", label: "Never spoken" },
+      { value: "unnamed", label: "Unnamed" },
+    ]},
+  ], "peopleFilter", () => renderPeople());
+  host.appendChild(bar);
+
+  const filtered = applyPeopleFilter(people);
+  $("peopleFilter-count").textContent = `${filtered.length} / ${people.length}`;
+
+  if (filtered.length === 0) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = people.length === 0
+      ? (state.query ? "Nobody matches that search." : "Nobody recorded yet.")
+      : "Nothing matches these filters.";
+    host.appendChild(e);
     return;
   }
-  const h = document.createElement("h2");
-  h.textContent = people.length + " people";
-  h.style.margin = "0 0 9px";
-  host.appendChild(h);
 
   const card = document.createElement("div");
   card.className = "card";
-  for (const m of people) card.appendChild(personRow(m));
+  for (const m of filtered) card.appendChild(personRow(m));
   host.appendChild(card);
 }
 
@@ -467,12 +689,12 @@ async function openChat(c) {
     for (const m of members) {
       const el = document.createElement("button");
       el.className = "rowline";
-      el.appendChild(avatar(nameOf(m), m.userId));
+      el.appendChild(avatar(nameOf(m) || shortId(m.userId), m.userId));
       const main = document.createElement("div");
       main.className = "main";
       const t = document.createElement("div");
       t.className = "title";
-      t.append(nameOf(m) + " ");
+      t.appendChild(nameNode(m));
       if (m.isAdmin) t.appendChild(pill("admin", "admin"));
       if (m.studentId) t.appendChild(pill(m.hidden ? "hidden" : m.studentId, "reg"));
       const sub = document.createElement("div");
@@ -498,7 +720,7 @@ async function openChat(c) {
 async function openPerson(m) {
   const sheet = $("sheet");
   sheet.innerHTML = "";
-  sheet.appendChild(sheetHead(nameOf(m), m.userId, m.userId));
+  sheet.appendChild(sheetHead(titleOf(m), m.userId, m.userId));
   $("drawer").classList.add("on");
 
   const facts = document.createElement("div");
@@ -557,6 +779,7 @@ for (const t of document.querySelectorAll(".tab")) {
     current = t.dataset.page;
     for (const p of document.querySelectorAll(".page")) p.classList.remove("on");
     $("page-" + current).classList.add("on");
+    $("search").placeholder = current === "chats" ? "Search chats..." : "Search people...";
     try { await render(current); } catch (e) { toast(e.message, true); }
   };
 }
@@ -567,7 +790,15 @@ async function render(page) {
   if (page === "people") return renderPeople();
 }
 
+/*
+Re-render the current tab, going back to the server for it.
+
+renderChats() reuses state.chats so that flipping a filter chip is instant
+rather than a round trip. That cache has to be dropped here, or the header's
+reload button would re-sort stale data and look like it did nothing.
+*/
 async function refresh() {
+  state.chats = [];
   try { await render(current); } catch (e) { toast(e.message, true); }
 }
 
@@ -576,9 +807,19 @@ $("search").oninput = (e) => {
   clearTimeout(timer);
   timer = setTimeout(() => {
     state.query = e.target.value.trim();
-    // Searching is about people, so jump there rather than filtering in place
-    if (current !== "people") document.querySelector('.tab[data-page="people"]').click();
-    else renderPeople().catch(err => toast(err.message, true));
+    /*
+    Search means different things per tab: on Chats it narrows the loaded list
+    by name or id locally, on the other tabs it queries people server-side.
+    Filtering chats in the browser is fine - there are tens of them, not
+    thousands, and it keeps typing instant.
+    */
+    if (current === "chats") {
+      renderChats().catch(err => toast(err.message, true));
+    } else if (current === "people") {
+      renderPeople().catch(err => toast(err.message, true));
+    } else {
+      document.querySelector('.tab[data-page="people"]').click();
+    }
   }, 260);
 };
 

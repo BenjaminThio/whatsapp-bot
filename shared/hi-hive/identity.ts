@@ -47,7 +47,7 @@ import { invalidateCredsCache } from "./creds.js";
 const MIN_NAME = 2;
 const MAX_NAME = 120;
 
-function cleanName(raw: string | null | undefined): string | null {
+export function cleanName(raw: string | null | undefined): string | null {
   if (!raw) return null;
   const name = raw.replace(/\s+/g, " ").trim();
   if (name.length < MIN_NAME) return null;

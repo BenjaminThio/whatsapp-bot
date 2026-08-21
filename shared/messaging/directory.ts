@@ -24,6 +24,20 @@ export interface ChatRow {
     name: string | null;
     memberCount: number;
     updatedAt: string;
+    /**
+     * The best available "last activity" signal for this chat.
+     *
+     * chats.updated_at alone is a weak proxy for a group: it moves on a
+     * membership harvest or a subject change, but ordinary chatter never
+     * touches it, since noteSpoke() only fires when someone runs a command the
+     * bot actually processes. Taking the newer of that and the most recent
+     * member.last_spoke gives "recent" its intended meaning - a chat the bot
+     * has actually been asked to do something in lately, not just one it
+     * happened to re-scan.
+     */
+    lastActivity: string;
+    /** How many members of this chat have registered hi_hive credentials. */
+    registeredCount: number;
 }
 
 export interface MemberRow {
@@ -159,6 +173,22 @@ export async function noteSpoke(
     }
 }
 
+/**
+ * Apply a learned name to every chat a person is in, at once.
+ *
+ * A contact's name becomes known independently of any one chat - WhatsApp
+ * hands it over via a low-level socket event, not a group event - so unlike
+ * noteSpoke() this is not chat-scoped: it reaches every row for this user_id
+ * across every group in a single statement.
+ */
+export async function renameMember(userId: string, transport: Transport, displayName: string): Promise<void> {
+    await sql`
+        UPDATE chat_members SET display_name = ${displayName}
+         WHERE user_id = ${userId} AND transport = ${transport}
+           AND display_name IS DISTINCT FROM ${displayName}
+    `;
+}
+
 /** Forget one chat, or everything. The census only; hi_hive is untouched. */
 export async function forgetChat(chatId: string, transport: Transport): Promise<number> {
     const r = await sql`
@@ -217,15 +247,25 @@ export async function overview(): Promise<Overview> {
     };
 }
 
-/** Every chat, biggest first. */
+/** Every chat, most recently active first. */
 export async function listChats(): Promise<ChatRow[]> {
     const rows = await sql<any[]>`
-        SELECT chat_id, transport, kind, name, member_count, updated_at
-          FROM chats ORDER BY member_count DESC, name NULLS LAST
+        SELECT c.chat_id, c.transport, c.kind, c.name, c.member_count, c.updated_at,
+               GREATEST(c.updated_at, COALESCE(max(m.last_spoke), c.updated_at)) AS last_activity,
+               count(DISTINCT CASE WHEN h.doc_id IS NOT NULL THEN m.user_id END)::int AS registered_count
+          FROM chats c
+          LEFT JOIN chat_members m ON m.chat_id = c.chat_id AND m.transport = c.transport
+          LEFT JOIN hi_hive h
+                 ON h.doc_id = m.user_id
+                 OR h.jid    = m.user_id
+                 OR h.doc_id = (SELECT doc_id FROM hi_hive_alias a WHERE a.alias_id = m.user_id)
+         GROUP BY c.chat_id, c.transport, c.kind, c.name, c.member_count, c.updated_at
+         ORDER BY last_activity DESC
     `;
     return rows.map(r => ({
         chatId: r.chat_id, transport: r.transport, kind: r.kind,
         name: r.name, memberCount: r.member_count, updatedAt: r.updated_at,
+        lastActivity: r.last_activity, registeredCount: r.registered_count,
     }));
 }
 
@@ -281,15 +321,24 @@ export async function listPeople(search = "", limit = 500): Promise<MemberDetail
 /** Which chats one person is in. */
 export async function chatsOf(userId: string): Promise<ChatRow[]> {
     const rows = await sql<any[]>`
-        SELECT c.chat_id, c.transport, c.kind, c.name, c.member_count, c.updated_at
+        SELECT c.chat_id, c.transport, c.kind, c.name, c.member_count, c.updated_at,
+               GREATEST(c.updated_at, COALESCE(max(m2.last_spoke), c.updated_at)) AS last_activity,
+               count(DISTINCT CASE WHEN h.doc_id IS NOT NULL THEN m2.user_id END)::int AS registered_count
           FROM chat_members m
           JOIN chats c ON c.chat_id = m.chat_id AND c.transport = m.transport
+          LEFT JOIN chat_members m2 ON m2.chat_id = c.chat_id AND m2.transport = c.transport
+          LEFT JOIN hi_hive h
+                 ON h.doc_id = m2.user_id
+                 OR h.jid    = m2.user_id
+                 OR h.doc_id = (SELECT doc_id FROM hi_hive_alias a WHERE a.alias_id = m2.user_id)
          WHERE m.user_id = ${userId}
-         ORDER BY c.member_count DESC
+         GROUP BY c.chat_id, c.transport, c.kind, c.name, c.member_count, c.updated_at
+         ORDER BY last_activity DESC
     `;
     return rows.map(r => ({
         chatId: r.chat_id, transport: r.transport, kind: r.kind,
         name: r.name, memberCount: r.member_count, updatedAt: r.updated_at,
+        lastActivity: r.last_activity, registeredCount: r.registered_count,
     }));
 }
 
