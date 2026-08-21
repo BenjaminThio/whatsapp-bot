@@ -8,6 +8,12 @@ import { addWhitelist, removeWhitelist, listWhitelist, getRankings } from "../..
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
 import { renderTimetablePng } from "../../../shared/hi-hive/visualise.js";
 import { cmd } from "../config/prefixes.js";
+import {
+    bindToExisting, bindNew, unbind, bindingsFor, formatBindings, parseBool,
+} from "../../../shared/hi-hive/bind.js";
+import {
+    resolveDocId as resolveDocIdShared, resolveOwnDocId,
+} from "../../../shared/hi-hive/creds.js";
 
 export interface Creds
 {
@@ -17,7 +23,7 @@ export interface Creds
     ownerId?: string;
 }
 
-const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v', 'rank', 'ranks', 'leaderboard', 'lb'] as const;
+const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v', 'rank', 'ranks', 'leaderboard', 'lb', 'bind'] as const;
 type Subcommand = typeof SUBCOMMANDS[number];
 const ID_REGEX: RegExp = /^\d{7}$/;
 const EMAIL_REGEX: RegExp = /^[a-zA-Z0-9._%+-]+@1utar\.my$/i;
@@ -57,6 +63,14 @@ const FORMATS = {
     isolated:   [`${T} <isolated | iso> [Student ID | Doc ID]`],
     visualise:  [`${T} <visualise | vis | v> [Student ID | Doc ID]`],
     rank:       [`${T} <rank | leaderboard | lb>`],
+    bind:       [
+        `${T} bind <User JID> <Student ID> <Utar Email> [isHidden (true/false)]`,
+        `${T} bind <User JID> <Creds Doc Ref ID | Student ID | Email>`,
+        `_(reply to them)_ ${T} bind <Student ID> <Utar Email> [isHidden (true/false)]`,
+        `_(reply to them)_ ${T} bind <Creds Doc Ref ID | Student ID | Email>`,
+        `${T} bind list [Creds Doc Ref ID]`,
+        `${T} bind remove <User JID>`,
+    ],
 } satisfies Record<string, string[]>;
 
 const bullets = (forms: string[]): string => forms.map(f => `- ${f}`).join('\n');
@@ -82,6 +96,15 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
 {
     const chatId: string = ctx.chatId;
     const userId: string = ctx.userId;
+    /*
+    The doc that holds THIS user's credentials.
+
+    Normally their jid, but `bind` can point that jid at an existing doc -
+    typically the one their Telegram account already uses. Everything that means
+    "my creds" goes through this so both platforms land on the same row, while
+    ownerId stays the raw jid because it records who acted.
+    */
+    const selfDoc: string = await resolveOwnDocId(ctx.userId);
     const params: string[] = ctx.args;
 
     // Every reply in this command goes through the outbox
@@ -167,7 +190,7 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
             creds.ownerId = userId;
         }
 
-        await saveCreds(anonymousId ?? userId, creds);
+        await saveCreds(anonymousId ?? selfDoc, creds);
 
         say(`${ hidden === undefined ? '⚠️ *Warning:* Hidden value provided is incorrect, proceed fallback to `false`.\n\n' : '' }👤 *${anonymousId === undefined ? 'Personal' : 'Anonymous'} Info Set!*\n🫆 Student ID: \`${creds.id}\`\n📧 Utar Email: \`${creds.email}\`${anonymousId !== undefined ? `\n🆔 Doc ID: \`${anonymousId}\`` : ''}${creds.ownerId !== undefined ? `\n🌐 Owner ID: \`${userId}\`` : ''}`);
     }
@@ -176,16 +199,14 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
     const getAttendanceReport = (docId: string, courseFilter: string | undefined) =>
         sendAttendanceReport(docId, chatId, msg, courseFilter);
 
-    /** Resolve a user-supplied id (doc id, student id or email) to a real doc id. */
+    /*
+    Resolve a user-supplied id (doc id, alias, student id or email) to a real
+    doc id. Delegates to the shared resolver so a `bind` made on either bot is
+    honoured identically here.
+    */
     async function resolveDocId(input: string | undefined): Promise<string | undefined>
     {
-        const key = (input ?? userId).trim();
-
-        if (await exists(key))
-            return key;
-
-        const related: string[] = await getRelatedDocIds(key);
-        return related.length > 0 ? related[0] : undefined;
+        return resolveDocIdShared(input ?? selfDoc);
     }
 
     /** Masked display name for a doc, falling back to the doc id. */
@@ -212,7 +233,7 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
 
     if (params.length === 0)
     {
-        const creds: Creds | undefined = await loadCreds(userId);
+        const creds: Creds | undefined = await loadCreds(selfDoc);
 
         getInfo(creds);
     }
@@ -252,7 +273,7 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
                     {
                         case 1:
                         {
-                            getAttendanceReport(userId, undefined);
+                            getAttendanceReport(selfDoc, undefined);
                             break;
                         }
                         case 2:
@@ -290,7 +311,7 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
                         case 1:
                         case 2:
                         {
-                            const docId: string = params[1] === undefined ? userId : params[1];
+                            const docId: string = params[1] === undefined ? selfDoc : params[1];
                             const creds: Creds | undefined = await looseLoadCreds(docId);
 
                             if (creds === undefined)
@@ -304,6 +325,51 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
                             say(formatsFor('info'));
                         }
                     }
+                    break;
+                }
+                /*
+                bind - attach someone else's chat account to credentials.
+
+                Saves them from running `!test set` themselves: you supply their
+                details once, from their jid. It is also how one person links
+                their WhatsApp and Telegram accounts to a single set of creds -
+                bind the other platform's id to the doc they already have.
+
+                Quote their message and the jid can be left out entirely.
+                */
+                case 'bind':
+                {
+                    const first: string | undefined = params[1];
+
+                    if (first === 'list')
+                    {
+                        const { docId, aliases } = await bindingsFor(params[2] ?? userId);
+                        say(docId ? formatBindings(docId, aliases) : 'No credentials found.');
+                        break;
+                    }
+
+                    if (first === 'remove' || first === 'rm' || first === 'unbind')
+                    {
+                        const target: string | undefined = params[2] ?? ctx.quotedSender ?? undefined;
+                        if (!target) { say(formatsFor('bind')); break; }
+                        say((await unbind(target)).message);
+                        break;
+                    }
+
+                    // Quoting makes the target implicit, so every argument shifts by one
+                    const quoted: string | null = ctx.quotedSender;
+                    const target: string | undefined = quoted ?? first;
+                    const rest: (string | undefined)[] = quoted
+                        ? [params[1], params[2], params[3]]
+                        : [params[2], params[3], params[4]];
+
+                    if (!target) { say(formatsFor('bind')); break; }
+
+                    const result = rest[1] !== undefined
+                        ? await bindNew(target, rest[0]!, rest[1]!, parseBool(rest[2]), 'whatsapp', userId)
+                        : await bindToExisting(target, rest[0] ?? '', 'whatsapp', userId);
+
+                    say(result.message);
                     break;
                 }
                 // Add anonymous credential just for auto scan feature.

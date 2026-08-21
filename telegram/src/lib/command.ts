@@ -31,6 +31,16 @@ export interface Ctx {
     userId: number;
     /** Display name of whoever sent it. */
     who: string;
+    /**
+     * User id of whoever wrote the message this one replies to.
+     *
+     * Lets a command act on "that person" without making anyone copy a numeric
+     * id around. Undefined when the message is not a reply, or when the reply
+     * target is a channel post with no author.
+     */
+    replyToUserId?: number;
+    /** Display name for replyToUserId, when there is one. */
+    replyToWho?: string;
 
     arg(index: number): string | undefined;
     /** args from `index` onward, rejoined with single spaces. */
@@ -93,6 +103,8 @@ function buildCtx(tg: CommandContext<Context>): Ctx | null {
     const reply = async (text: string, opts: ReplyOpts = {}): Promise<unknown> =>
         tg.reply(text, opts);
 
+    const replyFrom = tg.message?.reply_to_message?.from;
+
     return {
         tg,
         match,
@@ -102,6 +114,8 @@ function buildCtx(tg: CommandContext<Context>): Ctx | null {
         chatId: tg.chat.id,
         userId: tg.from.id,
         who: tg.from.username ?? tg.from.first_name ?? String(tg.from.id),
+        ...(replyFrom ? { replyToUserId: replyFrom.id } : {}),
+        ...(replyFrom ? { replyToWho: replyFrom.username ?? replyFrom.first_name ?? String(replyFrom.id) } : {}),
 
         arg: (i) => args[i],
         rest: (i) => args.slice(i).join(" "),

@@ -64,8 +64,11 @@ t()     { bash "$HERE/lasma.sh" telegram "\$@"; }
 lasma() { bash "$HERE/lasma.sh" both     "\$@"; }
 ub()    { proot-distro login $DISTRO --bind /sdcard:/sdcard; }
 pg()    { bash "$HERE/termux-postgres.sh" "\$@"; }
+# Database browser. Runs inside the proot; the port is shared with Termux,
+# so open the URL it prints in the phone's browser.
+db()    { proot-distro login $DISTRO -- bash -lc "cd $UROOT && bun run studio \$*"; }
 EOF
-    echo "added w, t, lasma, ub and pg to $RC"
+    echo "added w, t, lasma, ub, pg and db to $RC"
     command -v w >/dev/null 2>&1 &&         echo "note: w is also a system command; the function shadows it after sourcing"
 fi
 
@@ -84,4 +87,5 @@ Then, from the Termux prompt:
   ub             drop into an Ubuntu shell
   pg status      the database (it runs here in Termux, not in Ubuntu)
   pg start       start it - w and t do this for you anyway
+  db             browse and edit the database in your browser
 EOF

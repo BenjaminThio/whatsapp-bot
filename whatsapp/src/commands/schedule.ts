@@ -145,8 +145,9 @@ async function fireReminder(id: string, data: ScheduleDoc, overdueMs = 0) {
 
         let text: string;
         if (data.groupId && data.deadlineAt) {
-            // Escalating reminder — show urgency + exact time remaining to deadline
-            // Labels are lead-time based now, so decide "due" purely by the clock
+            // Escalating reminder — show urgency + exact time remaining to deadline.
+            // The label comes from the ladder (time before the deadline); "due"
+            // is decided purely by the clock.
             const isDue = data.deadlineAt - Date.now() <= 60_000;
             const header = isDue ? "🚨 *DUE NOW!*" : "⏰ *Deadline Reminder*";
             const remaining = humanRemaining(data.deadlineAt - Date.now());
@@ -176,28 +177,6 @@ async function fireReminder(id: string, data: ScheduleDoc, overdueMs = 0) {
     }
 }
 
-
-/*
-Label a ping by how far it is from the moment the reminder is CREATED — not by
-how far it is before the deadline. So a 12-hour reminder created now produces
-"9 hours left", "11 hours left", "12 hours left" for pings at +9h, +11h, +12h.
-The final deadline ping uses the same format (no "Now / due").
-*/
-function leadTimeLabel(msFromNow: number): string {
-    const mins = Math.max(0, Math.round(msFromNow / 60_000));
-
-    if (mins < 60) {
-        return `${mins} minute${mins === 1 ? "" : "s"} left`;
-    }
-
-    const hours = Math.round(mins / 60);
-    if (hours < 48) {
-        return `${hours} hour${hours === 1 ? "" : "s"} left`;
-    }
-
-    const days = Math.round(hours / 24);
-    return `${days} day${days === 1 ? "" : "s"} left`;
-}
 
 // Human-readable "time remaining" for escalation countdowns
 function humanRemaining(ms: number): string {
@@ -425,18 +404,23 @@ async function handleSchedule(_sock: WASocket, msg: WAMessage, _text: string, ct
             ? computeAutoMilestones(deadline - now)
             : ESCALATION_LEVELS[escalateLevel];
 
-        // Build the list of milestone fire-times that are still in the future
+        /*
+        Label each ping by how long is left when it fires, which is exactly what
+        the ladder's own labels already say.
+
+        This used to label by `fireAt - now` - the time between creating the
+        reminder and the ping - while still wording it as "left". Set a deadline
+        7 days and 1 hour out and the "1 hour left" ping fired 7 days after
+        creation, so it announced "7 days left" alongside a correct "deadline in
+        59m" countdown.
+        */
         const milestones = offsets
-            .map(m => {
-                const fireAt = deadline - m.offset;
-                // Label by lead time from NOW, not by distance before the deadline
-                return { fireAt, label: leadTimeLabel(fireAt - now) };
-            })
+            .map(m => ({ fireAt: deadline - m.offset, label: m.label }))
             .filter(m => m.fireAt > now);   // skip milestones already in the past
 
         // Always guarantee at least the deadline itself fires
         if (milestones.length === 0) {
-            milestones.push({ fireAt: deadline, label: leadTimeLabel(deadline - now) });
+            milestones.push({ fireAt: deadline, label: "deadline" });
         }
 
         if (pendingTotal + milestones.length > MAX_PER_CHAT) {

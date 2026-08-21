@@ -81,7 +81,7 @@ show_only() {
             [[ "$line" != *=* ]] && continue
             k=${line%%=*}; v=${line#*=}
             case "$k" in
-                PGHOST|PGPORT|PGUSER|PGDATABASE|*URL*|*ENDPOINT*|*DOMAIN*|SMART_SCHEDULE_SKIP)
+                PGHOST|PGPORT|PGUSER|PGDATABASE|BOT_TIMEZONE|*URL*|*ENDPOINT*|*DOMAIN*|SMART_SCHEDULE_SKIP)
                     echo "  $k=$v" ;;
                 *) [ -n "$v" ] && echo "  $k=$(mask "$v")" || echo "  $k=(unset)" ;;
             esac
@@ -115,6 +115,9 @@ ask_shared() {
     ask AES_IV      "AES IV that goes with it." "" secret
     ask DEVICE_ID   "Device id the portal expects." "" secret
     ask SMART_SCHEDULE_SKIP "Comma-separated class codes the smart scheduler ignores."
+
+    section "Display"
+    ask BOT_TIMEZONE "IANA timezone for every time the bots print, e.g. Asia/Kuala_Lumpur. The proot has no timezone of its own, so without this everything shows in UTC." "Asia/Kuala_Lumpur"
 
     section "Other services"
     ask OPEN_WEATHER_API_KEY "OpenWeather key for /weather." "" secret
@@ -157,6 +160,9 @@ write_shared() {
         echo "# UTAR attendance"
         for k in ATTENDANCE_QR_SCAN_API_DOMAIN ATTENDANCE_ENDPOINT UTAR_SCAN_URL \
                  UTAR_REPORT_URL AES_KEY AES_IV DEVICE_ID SMART_SCHEDULE_SKIP; do emit "$k"; done
+        echo
+        echo "# Display"
+        emit BOT_TIMEZONE
         echo
         echo "# Other services"
         for k in OPEN_WEATHER_API_KEY VERCEL_WEBHOOK_URL; do emit "$k"; done

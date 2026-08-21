@@ -22,6 +22,7 @@
  * Env: SCAN_BUFFER_TICK_MS (default 500)
  */
 
+import { formatClock } from "../utils/datetime.js";
 import {
   dueJobs, nextDueAt, markDone, batchPendingCount, batchRows, deleteBatch, purgeStale, claimBatchReport,
   releaseBatchReport, undeliveredBatches,
@@ -56,7 +57,8 @@ let started = false;                 // guard: reconnects must not stack pollers
 let ticking = false;                 // guard: ticks must never overlap
 const inFlight = new Set<string>();  // jobs currently being processed
 
-const clock = (d: Date) => d.toLocaleTimeString("en-US", { hour12: false });
+// Rendered in the bot's configured timezone, not the host's - see formatClock
+const clock = (d: Date) => formatClock(d.getTime());
 
 function buildReport(rows: BufferRow[]): string {
   const now = clock(new Date());

@@ -16,6 +16,8 @@
  *   AUTOSCAN_TICK_MS        (default 1000)
  */
 
+import { formatClock } from "../utils/datetime.js";
+
 export const MIN_DELAY_SEC = Number(process.env["AUTOSCAN_MIN_DELAY_SEC"] ?? 0);
 export const MAX_DELAY_SEC = Number(process.env["AUTOSCAN_MAX_DELAY_SEC"] ?? 5);
 const TICK_MS              = Number(process.env["AUTOSCAN_TICK_MS"] ?? 1000);
@@ -73,9 +75,14 @@ export function humanWait(sec: number): string {
   return `${m}m ${sStr}s`;
 }
 
-/** "14:30:05" */
+/**
+ * "14:30:05", in the bot's configured timezone.
+ *
+ * toLocaleTimeString() renders in the host's zone, and a proot-distro Ubuntu
+ * has none set - so scan times came out in UTC while the phone showed UTC+8.
+ */
 export function clock(d: Date): string {
-  return d.toLocaleTimeString("en-US", { hour12: false });
+  return formatClock(d.getTime());
 }
 
 /**

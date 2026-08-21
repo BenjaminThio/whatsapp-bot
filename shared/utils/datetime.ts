@@ -172,11 +172,68 @@ export function parseDateTime(tokens: string[], now: Date = new Date()): ParsedD
     return null;
 }
 
+/**
+ * The timezone every displayed time is rendered in.
+ *
+ * Set BOT_TIMEZONE (or TZ) in shared/.env. Without it the runtime falls back to
+ * the host's zone, and a proot-distro Ubuntu has none configured - so it is UTC.
+ * On a phone in UTC+8 that silently shifted every deadline, every scan time and
+ * every schedule listing eight hours back, while the underlying epoch
+ * arithmetic stayed correct. The result was countdowns that were right next to
+ * clock times that were wrong, which reads as the bot being confused rather
+ * than the display being misconfigured.
+ *
+ * Read lazily rather than cached at import, so a value loaded from shared/.env
+ * still applies whatever the module import order turns out to be.
+ */
+export function displayTimeZone(): string | undefined {
+    const tz = process.env["BOT_TIMEZONE"] || process.env["TZ"];
+    return tz && tz.trim() !== "" ? tz.trim() : undefined;
+}
+
+/** Calendar parts of an instant, in the configured zone. */
+function partsIn(epochMs: number, timeZone: string | undefined) {
+    const fmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone,
+        weekday: "short",
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+        hour12: false,
+    });
+    const out: Record<string, string> = {};
+    for (const p of fmt.formatToParts(epochMs)) {
+        if (p.type !== "literal") out[p.type] = p.value;
+    }
+    return out;
+}
+
 // Human-readable rendering of a target time, e.g. "Wed, 25/12/2026 14:30:00".
 export function formatDateTime(epochMs: number): string {
-    const d = new Date(epochMs);
-    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const pad = (n: number) => String(n).padStart(2, "0");
-    return `${days[d.getDay()]}, ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ` +
-           `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    const tz = displayTimeZone();
+    try {
+        const p = partsIn(epochMs, tz);
+        // Intl gives 24 for midnight in some locales; normalise it
+        const hour = p["hour"] === "24" ? "00" : p["hour"];
+        return `${p["weekday"]}, ${p["day"]}/${p["month"]}/${p["year"]} ` +
+               `${hour}:${p["minute"]}:${p["second"]}`;
+    } catch {
+        // An invalid BOT_TIMEZONE should not take the whole command down
+        const d = new Date(epochMs);
+        const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+        const pad = (n: number) => String(n).padStart(2, "0");
+        return `${days[d.getDay()]}, ${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ` +
+               `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    }
+}
+
+/** Wall-clock time only, e.g. "14:30:00", in the configured zone. */
+export function formatClock(epochMs: number): string {
+    const tz = displayTimeZone();
+    try {
+        const p = partsIn(epochMs, tz);
+        const hour = p["hour"] === "24" ? "00" : p["hour"];
+        return `${hour}:${p["minute"]}:${p["second"]}`;
+    } catch {
+        return new Date(epochMs).toLocaleTimeString("en-GB", { hour12: false });
+    }
 }

@@ -54,6 +54,7 @@ const SCHEMA_FILES = [
   "rank-and-meta.sql",
   "outbox-schema.sql",
   "telegram-schema.sql",
+  "identity-schema.sql",
 ];
 
 let ensured = false;

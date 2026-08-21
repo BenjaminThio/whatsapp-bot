@@ -1,0 +1,560 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Lasma DB Studio</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --panel: #ffffff;
+    --panel-2: #f8f9fa;
+    --line: #e0e3e7;
+    --text: #202124;
+    --muted: #5f6368;
+    --accent: #1a73e8;
+    --accent-soft: #e8f0fe;
+    --amber: #f9ab00;
+    --green: #1e8e3e;
+    --red: #d93025;
+    --purple: #9334e6;
+    --mono: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+    --col-w: 300px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #202124; --panel: #292a2d; --panel-2: #35363a; --line: #3c4043;
+      --text: #e8eaed; --muted: #9aa0a6; --accent: #8ab4f8; --accent-soft: #1f3a5f;
+      --amber: #fdd663; --green: #81c995; --red: #f28b82; --purple: #d7aefb;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text); overflow: hidden;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  /* ── Top bar ─────────────────────────────────────────────────────────── */
+  header {
+    display: flex; align-items: center; gap: 12px;
+    height: 52px; padding: 0 14px; border-bottom: 1px solid var(--line);
+    background: var(--panel); position: relative; z-index: 20;
+  }
+  .logo { display: flex; align-items: center; gap: 9px; font-weight: 500; font-size: 15px; }
+  .logo .dot { width: 22px; height: 22px; border-radius: 6px; background: var(--amber);
+               display: grid; place-items: center; font-size: 13px; }
+  header .spacer { flex: 1; }
+  header input[type=search] {
+    width: 210px; max-width: 40vw; padding: 7px 11px; border-radius: 8px;
+    border: 1px solid var(--line); background: var(--panel-2); color: var(--text);
+    font-size: 13px;
+  }
+  header input[type=search]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .ghost {
+    border: 1px solid var(--line); background: transparent; color: var(--muted);
+    border-radius: 8px; padding: 7px 11px; font-size: 13px; cursor: pointer;
+  }
+  .ghost:hover { background: var(--panel-2); color: var(--text); }
+
+  /* ── Three-pane layout ───────────────────────────────────────────────── */
+  main { display: flex; height: calc(100% - 52px); }
+  .pane { display: flex; flex-direction: column; border-right: 1px solid var(--line);
+          min-width: 0; background: var(--panel); }
+  #pane-tables { width: var(--col-w); flex: none; }
+  #pane-rows   { width: var(--col-w); flex: none; }
+  #pane-fields { flex: 1; border-right: none; }
+
+  .pane-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 14px; border-bottom: 1px solid var(--line);
+    font-size: 11px; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; min-height: 42px;
+  }
+  .pane-head .count { margin-left: auto; text-transform: none; letter-spacing: 0;
+                      font-weight: 400; font-size: 11px; }
+  .pane-body { overflow-y: auto; overflow-x: hidden; flex: 1;
+               -webkit-overflow-scrolling: touch; }
+
+  .item {
+    display: flex; align-items: center; gap: 9px; width: 100%;
+    padding: 10px 14px; border: 0; background: none; color: var(--text);
+    text-align: left; cursor: pointer; font-size: 13.5px;
+    border-bottom: 1px solid transparent;
+  }
+  .item:hover { background: var(--panel-2); }
+  .item.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
+  .item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .item .meta { font-size: 11px; color: var(--muted); flex: none; }
+  .item.active .meta { color: var(--accent); }
+  .item .ic { flex: none; opacity: .75; font-size: 13px; width: 16px; text-align: center; }
+
+  .empty { padding: 26px 16px; color: var(--muted); font-size: 13px; text-align: center; }
+
+  /* ── Field editor ────────────────────────────────────────────────────── */
+  .doc-path {
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    overflow-x: auto; white-space: nowrap;
+  }
+  .doc-path b { color: var(--text); font-weight: 500; }
+
+  .field {
+    display: grid; grid-template-columns: minmax(120px, 190px) 1fr;
+    gap: 10px; padding: 11px 16px; border-bottom: 1px solid var(--line);
+    align-items: start;
+  }
+  .field:hover { background: var(--panel-2); }
+  .fname { font-family: var(--mono); font-size: 12.5px; word-break: break-all; }
+  .ftype { display: block; font-size: 10.5px; color: var(--muted);
+           font-family: -apple-system, sans-serif; margin-top: 2px; }
+  .pk-tag { display: inline-block; margin-left: 5px; padding: 0 5px; border-radius: 4px;
+            background: var(--amber); color: #202124; font-size: 9.5px;
+            font-weight: 700; vertical-align: 1px; }
+
+  .fval { min-width: 0; }
+  .val {
+    font-family: var(--mono); font-size: 12.5px; word-break: break-word;
+    white-space: pre-wrap; cursor: text; padding: 5px 7px; border-radius: 6px;
+    border: 1px solid transparent; min-height: 30px;
+  }
+  .val:hover { border-color: var(--line); background: var(--bg); }
+  .val.null  { color: var(--muted); font-style: italic; }
+  .val.str   { color: var(--red); }
+  .val.num   { color: var(--green); }
+  .val.bool  { color: var(--purple); }
+  .val.json  { color: var(--text); }
+  .val.readonly { cursor: not-allowed; opacity: .65; }
+  .val.readonly:hover { border-color: transparent; background: none; }
+
+  textarea.edit {
+    width: 100%; font-family: var(--mono); font-size: 12.5px; line-height: 1.5;
+    padding: 7px; border-radius: 6px; border: 2px solid var(--accent);
+    background: var(--bg); color: var(--text); resize: vertical; min-height: 76px;
+  }
+  .edit-actions { display: flex; gap: 7px; margin-top: 7px; align-items: center; flex-wrap: wrap; }
+  .btn { border: 0; border-radius: 7px; padding: 7px 13px; font-size: 12.5px;
+         cursor: pointer; font-weight: 500; }
+  .btn.primary { background: var(--accent); color: #fff; }
+  .btn.plain   { background: var(--panel-2); color: var(--text); border: 1px solid var(--line); }
+  .btn.danger  { background: transparent; color: var(--red); border: 1px solid var(--red); }
+  .hint { font-size: 11px; color: var(--muted); }
+
+  /* ── Toast ───────────────────────────────────────────────────────────── */
+  #toast {
+    position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%) translateY(80px);
+    background: #323639; color: #fff; padding: 11px 17px; border-radius: 9px;
+    font-size: 13px; box-shadow: 0 3px 14px rgba(0,0,0,.35); transition: transform .22s;
+    z-index: 60; max-width: 90vw; opacity: 0;
+  }
+  #toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
+  #toast.err { background: var(--red); }
+
+  /* ── Phone: one pane at a time ───────────────────────────────────────── */
+  .back { display: none; }
+  @media (max-width: 860px) {
+    :root { --col-w: 100%; }
+    main > .pane { display: none; width: 100%; border-right: none; }
+    main > .pane.show { display: flex; }
+    .back { display: inline-flex; border: 0; background: none; color: var(--accent);
+            font-size: 18px; cursor: pointer; padding: 0 4px 0 0; }
+    header input[type=search] { width: 130px; }
+    .field { grid-template-columns: 1fr; gap: 4px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo"><span class="dot">🗄️</span> DB Studio</div>
+  <div class="spacer"></div>
+  <input type="search" id="search" placeholder="Search rows..." autocomplete="off">
+  <button class="ghost" id="refresh" title="Reload from the database">↻</button>
+</header>
+
+<main>
+  <section class="pane show" id="pane-tables">
+    <div class="pane-head">Tables <span class="count" id="tables-count"></span></div>
+    <div class="pane-body" id="tables"></div>
+  </section>
+
+  <section class="pane" id="pane-rows">
+    <div class="pane-head">
+      <button class="back" data-to="tables">‹</button>
+      <span id="rows-title">Rows</span>
+      <span class="count" id="rows-count"></span>
+    </div>
+    <div class="pane-body" id="rows"></div>
+  </section>
+
+  <section class="pane" id="pane-fields">
+    <div class="pane-head">
+      <button class="back" data-to="rows">‹</button>
+      <span>Fields</span>
+      <span class="count" id="fields-count"></span>
+    </div>
+    <div class="doc-path" id="path"></div>
+    <div class="pane-body" id="fields">
+      <div class="empty">Pick a table, then a row.</div>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+const state = {
+  tables: [],
+  table: null,      // TableInfo
+  rows: [],
+  row: null,
+  page: 0,
+  total: 0,
+  query: "",
+};
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function toast(msg, isError) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.className = isError ? "show err" : "show";
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.className = ""; }, isError ? 5200 : 2400);
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  const data = await res.json().catch(() => ({ error: "Bad response" }));
+  if (!res.ok) throw new Error(data.error || ("HTTP " + res.status));
+  return data;
+}
+
+/* The primary key of a row, as {column: value} - how the server addresses it. */
+function keyOf(row) {
+  const k = {};
+  for (const c of state.table.primaryKey) k[c] = String(row[c]);
+  return k;
+}
+
+/* A short human label for a row, like a Firestore document id. */
+function labelOf(row) {
+  if (state.table.primaryKey.length > 0) {
+    return state.table.primaryKey.map(c => row[c]).join(" / ");
+  }
+  const first = state.table.columns[0];
+  return first ? String(row[first.name]).slice(0, 40) : "(row)";
+}
+
+function classify(value, type) {
+  if (value === null || value === undefined) return "null";
+  if (type === "jsonb" || type === "json") return "json";
+  if (typeof value === "number") return "num";
+  if (typeof value === "boolean") return "bool";
+  if (typeof value === "object") return "json";
+  return "str";
+}
+
+function display(value, type) {
+  if (value === null || value === undefined) return "null";
+  if (type === "jsonb" || type === "json" || typeof value === "object") {
+    return JSON.stringify(value, null, 2);
+  }
+  return String(value);
+}
+
+// ── Panes (phone shows one at a time) ────────────────────────────────────────
+
+function showPane(which) {
+  if (window.innerWidth > 860) return;
+  for (const p of ["tables", "rows", "fields"]) {
+    $("pane-" + p).classList.toggle("show", p === which);
+  }
+}
+for (const b of document.querySelectorAll(".back")) {
+  b.onclick = () => showPane(b.dataset.to);
+}
+
+// ── Tables ───────────────────────────────────────────────────────────────────
+
+async function loadTables(refresh) {
+  const data = await api("/api/tables" + (refresh ? "?refresh=1" : ""));
+  state.tables = data.tables;
+  $("tables-count").textContent = data.tables.length + " tables";
+
+  const host = $("tables");
+  host.innerHTML = "";
+  for (const t of data.tables) {
+    const el = document.createElement("button");
+    el.className = "item" + (state.table && state.table.name === t.name ? " active" : "");
+    el.innerHTML =
+      '<span class="ic">▤</span>' +
+      '<span class="name"></span>' +
+      '<span class="meta"></span>';
+    el.querySelector(".name").textContent = t.name;
+    el.querySelector(".meta").textContent = t.rowCount;
+    el.onclick = () => selectTable(t.name);
+    host.appendChild(el);
+  }
+}
+
+async function selectTable(name, keepPage) {
+  if (!keepPage) { state.page = 0; state.query = ""; $("search").value = ""; }
+  state.row = null;
+  $("fields").innerHTML = '<div class="empty">Pick a row.</div>';
+  $("path").textContent = "";
+  $("fields-count").textContent = "";
+
+  await loadRows(name);
+  await loadTables();
+  showPane("rows");
+}
+
+// ── Rows ─────────────────────────────────────────────────────────────────────
+
+async function loadRows(name) {
+  const q = state.query ? "&q=" + encodeURIComponent(state.query) : "";
+  const data = await api(`/api/rows/${name}?page=${state.page}${q}`);
+
+  state.table = data.table;
+  state.rows = data.rows;
+  state.total = data.total;
+
+  $("rows-title").textContent = name;
+  $("rows-count").textContent = data.total + (data.total === 1 ? " row" : " rows");
+
+  const host = $("rows");
+  host.innerHTML = "";
+
+  if (!state.table.primaryKey.length) {
+    const warn = document.createElement("div");
+    warn.className = "empty";
+    warn.textContent = "This table has no primary key, so rows cannot be edited safely. Read-only.";
+    host.appendChild(warn);
+  }
+
+  if (data.rows.length === 0) {
+    const e = document.createElement("div");
+    e.className = "empty";
+    e.textContent = state.query ? "Nothing matches that search." : "No rows yet.";
+    host.appendChild(e);
+  }
+
+  for (const row of data.rows) {
+    const el = document.createElement("button");
+    el.className = "item";
+    el.innerHTML = '<span class="ic">▪</span><span class="name"></span>';
+    el.querySelector(".name").textContent = labelOf(row);
+    el.onclick = () => {
+      for (const s of host.querySelectorAll(".item")) s.classList.remove("active");
+      el.classList.add("active");
+      selectRow(row);
+    };
+    host.appendChild(el);
+  }
+
+  // Paging
+  const pages = Math.ceil(data.total / data.pageSize);
+  if (pages > 1) {
+    const nav = document.createElement("div");
+    nav.className = "empty";
+    nav.style.display = "flex";
+    nav.style.gap = "8px";
+    nav.style.justifyContent = "center";
+    nav.innerHTML =
+      '<button class="btn plain" ' + (state.page === 0 ? "disabled" : "") + '>Prev</button>' +
+      '<span style="align-self:center">' + (state.page + 1) + " / " + pages + '</span>' +
+      '<button class="btn plain" ' + (state.page + 1 >= pages ? "disabled" : "") + '>Next</button>';
+    const [prev, next] = nav.querySelectorAll("button");
+    prev.onclick = () => { state.page--; loadRows(name); };
+    next.onclick = () => { state.page++; loadRows(name); };
+    host.appendChild(nav);
+  }
+}
+
+// ── Fields ───────────────────────────────────────────────────────────────────
+
+function selectRow(row) {
+  state.row = row;
+  $("path").innerHTML = "";
+  const path = document.createElement("span");
+  path.innerHTML = "/ <b></b> / <b></b>";
+  path.querySelectorAll("b")[0].textContent = state.table.name;
+  path.querySelectorAll("b")[1].textContent = labelOf(row);
+  $("path").appendChild(path);
+
+  $("fields-count").textContent = state.table.columns.length + " fields";
+  renderFields();
+  showPane("fields");
+}
+
+function renderFields() {
+  const host = $("fields");
+  host.innerHTML = "";
+
+  for (const col of state.table.columns) {
+    const value = state.row[col.name];
+
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+
+    const nameEl = document.createElement("div");
+    nameEl.className = "fname";
+    nameEl.textContent = col.name;
+    if (col.isPrimaryKey) {
+      const tag = document.createElement("span");
+      tag.className = "pk-tag";
+      tag.textContent = "PK";
+      nameEl.appendChild(tag);
+    }
+    const typeEl = document.createElement("span");
+    typeEl.className = "ftype";
+    typeEl.textContent = col.type + (col.nullable ? "" : " · required");
+    nameEl.appendChild(typeEl);
+
+    const valWrap = document.createElement("div");
+    valWrap.className = "fval";
+
+    const readonly = col.isPrimaryKey || state.table.primaryKey.length === 0;
+    const valEl = document.createElement("div");
+    valEl.className = "val " + classify(value, col.type) + (readonly ? " readonly" : "");
+    valEl.textContent = display(value, col.type);
+    if (!readonly) valEl.onclick = () => beginEdit(wrap, valWrap, col, value);
+    valWrap.appendChild(valEl);
+
+    wrap.appendChild(nameEl);
+    wrap.appendChild(valWrap);
+    host.appendChild(wrap);
+  }
+
+  if (state.table.primaryKey.length > 0) {
+    const foot = document.createElement("div");
+    foot.style.padding = "14px 16px";
+    const del = document.createElement("button");
+    del.className = "btn danger";
+    del.textContent = "Delete this row";
+    del.onclick = deleteRow;
+    foot.appendChild(del);
+    host.appendChild(foot);
+  }
+}
+
+function beginEdit(wrap, valWrap, col, value) {
+  valWrap.innerHTML = "";
+
+  const ta = document.createElement("textarea");
+  ta.className = "edit";
+  ta.value = value === null || value === undefined ? "" : display(value, col.type);
+  if (col.type === "jsonb" || col.type === "json") ta.rows = 10;
+  valWrap.appendChild(ta);
+
+  const actions = document.createElement("div");
+  actions.className = "edit-actions";
+
+  const save = document.createElement("button");
+  save.className = "btn primary";
+  save.textContent = "Save";
+
+  const cancel = document.createElement("button");
+  cancel.className = "btn plain";
+  cancel.textContent = "Cancel";
+
+  actions.appendChild(save);
+  actions.appendChild(cancel);
+
+  if (col.nullable) {
+    const nul = document.createElement("button");
+    nul.className = "btn plain";
+    nul.textContent = "Set null";
+    nul.onclick = () => commit(col, null);
+    actions.appendChild(nul);
+  }
+
+  const hint = document.createElement("span");
+  hint.className = "hint";
+  hint.textContent = (col.type === "jsonb" || col.type === "json")
+    ? "Must be valid JSON."
+    : (col.nullable ? "Empty means null." : "");
+  actions.appendChild(hint);
+
+  valWrap.appendChild(actions);
+  ta.focus();
+
+  cancel.onclick = () => renderFields();
+  save.onclick = () => commit(col, ta.value);
+}
+
+async function commit(col, raw) {
+  try {
+    const data = await api("/api/cell", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        table: state.table.name,
+        key: keyOf(state.row),
+        column: col.name,
+        value: raw,
+      }),
+    });
+    state.row = data.row;
+    // Keep the list in step so the label updates without a full reload
+    const i = state.rows.findIndex(r =>
+      state.table.primaryKey.every(k => String(r[k]) === String(data.row[k])));
+    if (i !== -1) state.rows[i] = data.row;
+    renderFields();
+    toast("Saved " + col.name);
+  } catch (err) {
+    toast(err.message, true);
+    renderFields();
+  }
+}
+
+async function deleteRow() {
+  if (!confirm("Delete this row permanently?\n\n" + labelOf(state.row))) return;
+  try {
+    await api("/api/delete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ table: state.table.name, key: keyOf(state.row) }),
+    });
+    toast("Row deleted");
+    state.row = null;
+    $("fields").innerHTML = '<div class="empty">Row deleted.</div>';
+    $("path").textContent = "";
+    await loadRows(state.table.name);
+    await loadTables(true);
+    showPane("rows");
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+// ── Wiring ───────────────────────────────────────────────────────────────────
+
+let searchTimer;
+$("search").oninput = (e) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    if (!state.table) return;
+    state.query = e.target.value.trim();
+    state.page = 0;
+    loadRows(state.table.name).catch(err => toast(err.message, true));
+  }, 260);
+};
+
+$("refresh").onclick = async () => {
+  try {
+    await loadTables(true);
+    if (state.table) await loadRows(state.table.name);
+    toast("Reloaded");
+  } catch (err) { toast(err.message, true); }
+};
+
+loadTables().catch(err => toast(err.message, true));
+</script>
+</body>
+</html>

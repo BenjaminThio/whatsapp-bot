@@ -31,12 +31,16 @@ import { refreshToken } from "../../../shared/hi-hive/legacy/refresh-token.js";
 import {
     addAnonymousCreds, deleteCreds, exists, getAnonymousDocIds,
     getRelatedDocIds, loadCreds, looseLoadCreds, saveCreds, getAllDocs,
+    resolveDocId as resolveDocIdShared, resolveOwnDocId,
 } from "../../../shared/hi-hive/creds.js";
 import {
     addWhitelist, removeWhitelist, listWhitelist, getRankings,
     enqueueBatch, newId as newBufferId, incrementContribution,
 } from "../../../shared/hi-hive/scan-buffer-db.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
+import {
+    bindToExisting, bindNew, unbind, bindingsFor, formatBindings, parseBool,
+} from "../../../shared/hi-hive/bind.js";
 import { renderTimetablePng } from "../../../shared/hi-hive/visualise.js";
 import { randomDelaySec, formatWaitingNoticeGrouped } from "../../../shared/hi-hive/scan-buffer.js";
 import type { Destination } from "../../../shared/hi-hive/destinations.js";
@@ -52,8 +56,14 @@ const MAX_TG_TEXT = 4000;
 const ID_REGEX = /^\d{7}$/;
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@1utar\.my$/i;
 
-/** A Telegram user id doubles as the credentials doc id, like a WhatsApp jid does. */
-const docIdFor = (ctx: Ctx): string => String(ctx.userId);
+/*
+The caller's own credentials doc.
+
+Their Telegram user id is the doc id until they bind that id to an existing doc
+- typically the one their WhatsApp account already uses. After that, both
+platforms resolve to the same credentials and the same contribution count.
+*/
+const ownDocId = (ctx: Ctx): Promise<string> => resolveOwnDocId(String(ctx.userId));
 
 // ── Formatting (shared shape with the WhatsApp bot, plain text for Telegram) ──
 
@@ -165,7 +175,7 @@ const attendance = cmd("attendance", {
     description: "Fetch your UTAR attendance report",
     args: "[course_code]",
 }, async (ctx: Ctx) => {
-    await sendAttendanceReport(ctx, docIdFor(ctx), ctx.match || undefined);
+    await sendAttendanceReport(ctx, await ownDocId(ctx), ctx.match || undefined);
 });
 
 /** Pull a QR string out of the attached/replied image. Null after explaining why. */
@@ -201,7 +211,7 @@ const scan = cmd("scan", {
 
     if (!ctx.hasArgs) await ctx.status(`🔍 Extracted:\n${rawQr}\n\n⏳ Submitting...`);
 
-    const result = await scanQr(docIdFor(ctx), rawQr);
+    const result = await scanQr(await ownDocId(ctx), rawQr);
     if (result === undefined) {
         await ctx.reply("Credentials are not set. Use /hihive set <studentId> <email>.");
         return;
@@ -237,7 +247,7 @@ const decode = cmd("decode", {
         return;
     }
 
-    const result = decodeQr(docIdFor(ctx), raw);
+    const result = decodeQr(await ownDocId(ctx), raw);
     if (!result.ok) {
         await ctx.reply(`❌ Decode failed\n${result.error}`);
         return;
@@ -410,11 +420,13 @@ function credsProblems(id: string, email: string): string[] {
 }
 
 /** Resolve a user-supplied id (doc id, student id or email) to a real doc id. */
+/*
+Resolve an id the user typed. Delegates to the shared resolver so an explicit
+`bind` is honoured here exactly as it is on WhatsApp: exact doc, then alias,
+then the loose student-id/email match.
+*/
 async function resolveDocId(input: string | undefined, fallback: string): Promise<string | undefined> {
-    const key = (input ?? fallback).trim();
-    if (await exists(key)) return key;
-    const related = await getRelatedDocIds(key);
-    return related.length > 0 ? related[0] : undefined;
+    return resolveDocIdShared(input ?? fallback);
 }
 
 /** Masked display name for a doc. */
@@ -430,7 +442,7 @@ const hihive = cmd("hihive", {
     args: "<subcommand> [args...]",
     usageHint: `Subcommands:\n${HIHIVE_FORMATS.join("\n")}`,
 }, async (ctx: Ctx) => {
-    const me = docIdFor(ctx);
+    const me = await ownDocId(ctx);
     const showInfo = (creds: Creds | undefined): string =>
         creds === undefined
             ? "No credentials stored. Register with /hihive set <studentId> <email>."
@@ -460,6 +472,63 @@ const hihive = cmd("hihive", {
                 await saveCreds(me, { id, email, hidden: toBool(hidden) });
                 await ctx.reply(`✅ Saved\n🫆 ${id}\n📧 ${email}`);
             }
+            return;
+        }
+
+        /*
+        bind - attach someone else's account to credentials.
+
+          /hihive bind <userId> <studentId> <email> [hidden]   create and bind
+          /hihive bind <userId> <docRef>                       bind to existing
+          /hihive bind list [id]                               who is bound
+          /hihive bind remove <userId>                         unbind
+
+        Reply to their message and the id can be left out entirely.
+        */
+        case "bind": {
+            const first = ctx.arg(1);
+
+            if (first === "list") {
+                const { docId, aliases } = await bindingsFor(ctx.arg(2) ?? String(me));
+                await ctx.reply(docId ? formatBindings(docId, aliases) : "No credentials found.");
+                return;
+            }
+
+            if (first === "remove" || first === "rm" || first === "unbind") {
+                const target = ctx.arg(2) ?? (ctx.replyToUserId ? String(ctx.replyToUserId) : undefined);
+                if (!target) { await ctx.reply("Usage: /hihive bind remove <userId>"); return; }
+                await ctx.reply((await unbind(target)).message);
+                return;
+            }
+
+            // With a reply the target is implicit, so every argument shifts by one
+            const replying = ctx.replyToUserId !== undefined;
+            const target = replying ? String(ctx.replyToUserId) : first;
+            const rest = replying ? [first, ctx.arg(2), ctx.arg(3)] : [ctx.arg(2), ctx.arg(3), ctx.arg(4)];
+
+            if (!target) {
+                await ctx.reply(
+                    [
+                        "Usage:",
+                        "  /hihive bind <userId> <studentId> <email> [hidden]",
+                        "  /hihive bind <userId> <docId | studentId | email>",
+                        "",
+                        "Reply to their message and drop the userId:",
+                        "  /hihive bind <studentId> <email> [hidden]",
+                        "  /hihive bind <docId | studentId | email>",
+                        "",
+                        "  /hihive bind list [id]",
+                        "  /hihive bind remove <userId>",
+                    ].join("\n")
+                );
+                return;
+            }
+
+            const result = rest[1]
+                ? await bindNew(target, rest[0]!, rest[1]!, parseBool(rest[2]), "telegram", String(me))
+                : await bindToExisting(target, rest[0] ?? "", "telegram", String(me));
+
+            await ctx.reply(result.message);
             return;
         }
 

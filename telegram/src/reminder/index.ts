@@ -90,14 +90,7 @@ const computeAutoMilestones = (runwayMs: number): Milestone[] => {
     return picked.length > 0 ? picked : [{ offset: 0, label: "deadline" }];
 };
 
-/** Label a ping by how far it is from NOW, not from the deadline. */
-function leadTimeLabel(msFromNow: number): string {
-    const mins = Math.max(0, Math.round(msFromNow / 60_000));
-    if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} left`;
-    const hours = Math.round(mins / 60);
-    if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"} left`;
-    return `${Math.round(hours / 24)} day${Math.round(hours / 24) === 1 ? "" : "s"} left`;
-}
+
 
 function humanRemaining(ms: number): string {
     if (ms <= 0) return "now";
@@ -313,13 +306,22 @@ const schedule = cmd("schedule", {
             ? computeAutoMilestones(deadline - now)
             : ESCALATION_LEVELS[level]!;
 
+        /*
+        Label each ping by how long is left when it fires - which is what the
+        ladder's own labels already say.
+
+        This used to label by `fireAt - now`, the gap between creating the
+        reminder and the ping, while still wording it as "left". A deadline 7
+        days and 1 hour out made the "1 hour left" ping announce "7 days left"
+        next to a correct "deadline in 59m" countdown.
+        */
         const milestones = offsets
-            .map(m => ({ fireAt: deadline - m.offset, label: leadTimeLabel(deadline - m.offset - now) }))
+            .map(m => ({ fireAt: deadline - m.offset, label: m.label }))
             .filter(m => m.fireAt > now);
 
         // Always guarantee the deadline itself fires
         if (milestones.length === 0) {
-            milestones.push({ fireAt: deadline, label: leadTimeLabel(deadline - now) });
+            milestones.push({ fireAt: deadline, label: "deadline" });
         }
 
         if (pendingTotal + milestones.length > MAX_PER_CHAT) {

@@ -27,7 +27,7 @@
 import type { WAMessage, WASocket } from "@whiskeysockets/baileys";
 import type { Command } from "../commands/_types.js";
 import { resolveIds } from "./jid.js";
-import { splitArgs, parseQuotedArgs, quotedBody } from "./wa-text.js";
+import { splitArgs, parseQuotedArgs, quotedBody, quotedSenderJid } from "./wa-text.js";
 import { queueMessage, queueReply, reactNow, type QueueOpts } from "./outbox.js";
 
 export interface CommandContext {
@@ -60,6 +60,13 @@ export interface CommandContext {
 
     /** The message being replied to, if any. */
     quoted: any | null;
+    /**
+     * Jid of whoever sent the message this one quotes.
+     *
+     * Lets a command act on "that person" without anyone copying a jid around.
+     * Null when the message quotes nothing.
+     */
+    quotedSender: string | null;
 
     arg(index: number): string | undefined;
     /** args from `index` onward, rejoined with single spaces. */
@@ -122,6 +129,7 @@ export function buildContext(params: {
         hasArgs: match.length > 0,
 
         quoted: quotedBody(params.msg),
+        quotedSender: quotedSenderJid(params.msg),
 
         arg: (index: number) => args[index],
         rest: (index: number) => args.slice(index).join(" "),

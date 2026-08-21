@@ -17,7 +17,8 @@
     "typecheck": "bun run typecheck:whatsapp && bun run typecheck:telegram",
     "typecheck:whatsapp": "cd whatsapp && tsc --noEmit",
     "typecheck:telegram": "cd telegram && tsc --noEmit",
-    "migrate:firestore": "cd telegram && bun run scripts/migrate-firestore.ts"
+    "migrate:firestore": "cd telegram && bun run scripts/migrate-firestore.ts",
+    "studio": "bun run tools/db-studio/server.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",

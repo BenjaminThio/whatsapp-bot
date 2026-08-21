@@ -20,6 +20,19 @@ export function messageBody(msg: WAMessage): any | null {
 }
 
 /** The message this one is replying to, or null. */
+/**
+ * Jid of whoever wrote the quoted message.
+ *
+ * Baileys puts it in contextInfo.participant. Null when nothing is quoted, so
+ * callers can fall back to an explicitly typed id.
+ */
+export function quotedSenderJid(msg: WAMessage): string | null {
+    const body: any = msg.message?.extendedTextMessage
+        ?? (msg.message as any)?.imageMessage
+        ?? (msg.message as any)?.videoMessage;
+    return body?.contextInfo?.participant ?? null;
+}
+
 export function quotedBody(msg: WAMessage): any | null {
     const body = messageBody(msg);
     return body?.extendedTextMessage?.contextInfo?.quotedMessage ?? null;
