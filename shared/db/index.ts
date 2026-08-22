@@ -57,6 +57,7 @@ const SCHEMA_FILES = [
   "identity-schema.sql",
   "hihive-identity.sql",
   "directory-schema.sql",
+  "directory-phone.sql",
 ];
 
 let ensured = false;

@@ -24,7 +24,8 @@
 
 import type { WASocket } from "@whiskeysockets/baileys";
 import {
-    upsertChat, replaceMembers, renameMember, type HarvestedMember,
+    upsertChat, replaceMembers, renameMember, setMemberPhone, unresolvedLids,
+    type HarvestedMember,
 } from "../../../shared/messaging/directory.js";
 import { rememberIdentity, cleanName } from "../../../shared/hi-hive/identity.js";
 
@@ -34,6 +35,8 @@ const TRANSPORT = "whatsapp" as const;
 const INITIAL_DELAY_MS = 8_000;
 /** Ignore a refresh for a group touched more recently than this. */
 const REFRESH_COOLDOWN_MS = 60_000;
+/** How often to retry lids that had no phone number yet. */
+const PHONE_RETRY_MS = 15 * 60_000;
 
 const lastHarvest = new Map<string, number>();
 let sweeping = false;
@@ -42,6 +45,8 @@ export interface HarvestSummary {
     groups: number;
     members: number;
     failed: number;
+    /** Members whose lid was resolved to a phone number. */
+    phones: number;
 }
 
 /**
@@ -50,10 +55,10 @@ export interface HarvestSummary {
  * One call to WhatsApp; the rest is database work.
  */
 export async function harvestAllGroups(sock: WASocket): Promise<HarvestSummary> {
-    if (sweeping) return { groups: 0, members: 0, failed: 0 };
+    if (sweeping) return { groups: 0, members: 0, failed: 0, phones: 0 };
     sweeping = true;
 
-    const summary: HarvestSummary = { groups: 0, members: 0, failed: 0 };
+    const summary: HarvestSummary = { groups: 0, members: 0, failed: 0, phones: 0 };
 
     try {
         const all = await sock.groupFetchAllParticipating();
@@ -69,6 +74,7 @@ export async function harvestAllGroups(sock: WASocket): Promise<HarvestSummary> 
                     memberCount: members.length,
                 });
                 await replaceMembers(jid, TRANSPORT, members);
+                summary.phones += await resolvePhoneNumbers(sock, members);
 
                 lastHarvest.set(jid, Date.now());
                 summary.groups++;
@@ -88,6 +94,33 @@ export async function harvestAllGroups(sock: WASocket): Promise<HarvestSummary> 
     return summary;
 }
 
+/**
+ * Retry phone-number resolution for lids already in the database.
+ *
+ * The lid -> number table fills up as Baileys decrypts traffic, so a lid that
+ * was unresolvable during the first sweep often becomes resolvable hours later
+ * without the membership itself having changed. Re-running the whole harvest to
+ * pick those up would refetch every group for nothing; this reads the ids we
+ * already have and asks the local store again.
+ */
+export async function resolvePendingPhones(sock: WASocket): Promise<number> {
+    const store = (sock as any)?.signalRepository?.lidMapping;
+    if (!store?.getPNForLID) return 0;
+
+    const pending = await unresolvedLids(TRANSPORT);
+    let resolved = 0;
+
+    for (const lid of pending) {
+        try {
+            const digits = normalisePhone(await store.getPNForLID(lid));
+            if (!digits) continue;
+            await setMemberPhone(lid, TRANSPORT, digits);
+            resolved++;
+        } catch { /* still unknown */ }
+    }
+    return resolved;
+}
+
 /** Re-read one group, unless it was just done. */
 export async function harvestGroup(sock: WASocket, jid: string, force = false): Promise<number> {
     const last = lastHarvest.get(jid) ?? 0;
@@ -104,6 +137,7 @@ export async function harvestGroup(sock: WASocket, jid: string, force = false): 
             memberCount: members.length,
         });
         await replaceMembers(jid, TRANSPORT, members);
+        await resolvePhoneNumbers(sock, members);
 
         lastHarvest.set(jid, Date.now());
         return members.length;
@@ -136,11 +170,66 @@ function participantsOf(meta: any): HarvestedMember[] {
         out.push({
             userId: id,
             displayName: cleanName(p?.name ?? p?.notify),
+            /*
+            A participant IS a Contact, so it may already carry the phone-number
+            form alongside the lid. Free when present, and the only field here
+            that makes an unnamed member recognisable.
+            */
+            phoneNumber: normalisePhone(p?.phoneNumber ?? (isPhoneJid(id) ? id : null)),
             // Baileys reports "admin" | "superadmin" | null
             isAdmin: p?.admin === "admin" || p?.admin === "superadmin",
         });
     }
     return out;
+}
+
+const isPhoneJid = (id: string): boolean => id.endsWith("@s.whatsapp.net");
+
+/**
+ * Bare digits from a phone jid or raw number. Null when there is nothing usable.
+ *
+ * REFUSES an "@lid" input. A lid is also a long run of digits, so stripping
+ * non-digits from one yields something that looks exactly like a phone number
+ * and is not - storing that would put a fabricated number next to someone's
+ * name and make it impossible to tell resolved rows from unresolved ones.
+ */
+function normalisePhone(raw: string | null | undefined): string | null {
+    if (!raw) return null;
+    const str = String(raw);
+    if (str.includes("@lid")) return null;
+
+    const digits = str.split("@")[0]!.split(":")[0]!.replace(/\D/g, "");
+    // Shorter than this is not a dialable number, it is a truncated id
+    return digits.length >= 8 && digits.length <= 15 ? digits : null;
+}
+
+/**
+ * Fill in phone numbers for members WhatsApp only gave us a lid for.
+ *
+ * Baileys keeps its own lid -> phone-number table, populated as it decrypts
+ * traffic. Reading it costs nothing and sends nothing. It will not know every
+ * lid - the ones it has never seen a message from stay unresolved - so this is
+ * best-effort and runs after the membership write rather than blocking it.
+ */
+async function resolvePhoneNumbers(sock: WASocket, members: HarvestedMember[]): Promise<number> {
+    const store = (sock as any)?.signalRepository?.lidMapping;
+    if (!store?.getPNForLID) return 0;
+
+    let resolved = 0;
+    for (const m of members) {
+        if (m.phoneNumber || !m.userId.endsWith("@lid")) continue;
+        try {
+            const pn = await store.getPNForLID(m.userId);
+            const digits = normalisePhone(pn);
+            if (!digits) continue;
+            m.phoneNumber = digits;
+            await setMemberPhone(m.userId, TRANSPORT, digits);
+            resolved++;
+        } catch {
+            // A lid the store has never seen simply stays unresolved
+        }
+    }
+    return resolved;
 }
 
 /*
@@ -162,16 +251,23 @@ learns who that lid actually belongs to.
 */
 async function applyContactName(contact: any): Promise<void> {
     const name = cleanName(contact?.name ?? contact?.notify);
-    if (!name) return;
+    const phone = normalisePhone(contact?.phoneNumber ?? contact?.id);
 
     const ids = new Set<string>(
         [contact?.id, contact?.lid, contact?.phoneNumber].filter(Boolean)
     );
+    if (ids.size === 0) return;
+
     for (const id of ids) {
-        await renameMember(id, "whatsapp", name).catch(() => {});
-        // hi_hive only updates a row that already exists - seeing a contact's
-        // name is not grounds to create credentials for them
-        void rememberIdentity(id, name);
+        if (name) {
+            await renameMember(id, "whatsapp", name).catch(() => {});
+            // hi_hive only updates a row that already exists - seeing a
+            // contact's name is not grounds to create credentials for them
+            void rememberIdentity(id, name);
+        }
+        // A contact event often carries the number even when it carries no
+        // name, and the number alone already makes the row recognisable
+        if (phone) await setMemberPhone(id, "whatsapp", phone).catch(() => {});
     }
 }
 
@@ -185,7 +281,8 @@ export function startHarvester(sock: WASocket): void {
     setTimeout(() => {
         void harvestAllGroups(sock).then(s => {
             if (s.groups > 0) {
-                console.log(`📇 Directory: ${s.members} member(s) across ${s.groups} group(s)` +
+                console.log(`📇 Directory: ${s.members} member(s) across ${s.groups} group(s), ` +
+                            `${s.phones} phone number(s) resolved` +
                             `${s.failed > 0 ? `, ${s.failed} failed` : ""}.`);
             }
         });
@@ -202,6 +299,17 @@ export function startHarvester(sock: WASocket): void {
             if (u?.id) void harvestGroup(sock, u.id);
         }
     });
+
+    /*
+    Retry unresolved lids on a slow timer. Purely local - it re-reads Baileys'
+    own mapping store, which keeps filling as traffic is decrypted, and sends
+    nothing to WhatsApp.
+    */
+    setInterval(() => {
+        void resolvePendingPhones(sock).then(n => {
+            if (n > 0) console.log(`📇 Resolved ${n} more phone number(s).`);
+        });
+    }, PHONE_RETRY_MS);
 
     // Names arriving over time - see applyContactName() for why this matters
     sock.ev.on("contacts.upsert", (contacts: any[]) => {

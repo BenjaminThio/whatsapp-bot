@@ -45,6 +45,7 @@ export interface MemberRow {
     userId: string;
     transport: string;
     displayName: string | null;
+    phoneNumber: string | null;
     isAdmin: boolean;
     firstSeen: string;
     lastSeen: string;
@@ -55,6 +56,8 @@ export interface HarvestedMember {
     userId: string;
     displayName?: string | null;
     isAdmin?: boolean;
+    /** Phone-number form of this account, when WhatsApp has revealed it. */
+    phoneNumber?: string | null;
 }
 
 // ── Writes ────────────────────────────────────────────────────────────────────
@@ -96,11 +99,13 @@ export async function replaceMembers(
         for (const m of members) {
             await trx`
                 INSERT INTO chat_members
-                    (chat_id, user_id, transport, display_name, is_admin, first_seen, last_seen)
+                    (chat_id, user_id, transport, display_name, phone_number,
+                     is_admin, first_seen, last_seen)
                 VALUES (${chatId}, ${m.userId}, ${transport}, ${m.displayName ?? null},
-                        ${m.isAdmin ?? false}, now(), now())
+                        ${m.phoneNumber ?? null}, ${m.isAdmin ?? false}, now(), now())
                 ON CONFLICT (chat_id, user_id, transport) DO UPDATE SET
                     display_name = COALESCE(EXCLUDED.display_name, chat_members.display_name),
+                    phone_number = COALESCE(EXCLUDED.phone_number, chat_members.phone_number),
                     is_admin     = EXCLUDED.is_admin,
                     last_seen    = now()
             `;
@@ -187,6 +192,38 @@ export async function renameMember(userId: string, transport: Transport, display
          WHERE user_id = ${userId} AND transport = ${transport}
            AND display_name IS DISTINCT FROM ${displayName}
     `;
+}
+
+/**
+ * Record the phone-number form of an account, across every chat it appears in.
+ *
+ * Separate from renameMember() because the two arrive independently: a lid can
+ * be resolved to a number long before anyone learns a name for it, and a name
+ * can turn up for an account whose number is still unknown.
+ */
+export async function setMemberPhone(userId: string, transport: Transport, phone: string): Promise<void> {
+    await sql`
+        UPDATE chat_members SET phone_number = ${phone}
+         WHERE user_id = ${userId} AND transport = ${transport}
+           AND phone_number IS DISTINCT FROM ${phone}
+    `;
+    await sql`
+        UPDATE hi_hive SET phone_number = ${phone}
+         WHERE (jid = ${userId} OR doc_id = ${userId})
+           AND phone_number IS DISTINCT FROM ${phone}
+    `;
+}
+
+/** Distinct lids that still have no phone number, for a resolution retry. */
+export async function unresolvedLids(transport: Transport, limit = 2000): Promise<string[]> {
+    const rows = await sql<{ user_id: string }[]>`
+        SELECT DISTINCT user_id FROM chat_members
+         WHERE transport = ${transport}
+           AND phone_number IS NULL
+           AND user_id LIKE ${"%@lid"}
+         LIMIT ${limit}
+    `;
+    return rows.map(r => r.user_id);
 }
 
 /** Forget one chat, or everything. The census only; hi_hive is untouched. */
@@ -348,6 +385,7 @@ function mapMember(r: any): MemberDetail {
         userId: r.user_id,
         transport: r.transport,
         displayName: r.display_name,
+        phoneNumber: r.phone_number ?? null,
         isAdmin: r.is_admin,
         firstSeen: r.first_seen,
         lastSeen: r.last_seen,

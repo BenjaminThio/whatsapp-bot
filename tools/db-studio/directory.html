@@ -236,6 +236,31 @@ const tpill = (t) => pill(t === "whatsapp" ? "WA" : "TG", t === "whatsapp" ? "wa
 const nameOf = (m) => m.displayName || m.studentId || null;
 
 /*
+Format bare digits as a phone number.
+
+WhatsApp addresses group members by a privacy id, so for most people the only
+recognisable thing available is their number. Grouping the digits makes it
+scannable; the country code is left on because these are international.
+*/
+function formatPhone(digits) {
+  if (!digits) return null;
+  const d = String(digits).replace(/\D/g, "");
+  if (d.length < 8) return null;
+  /*
+  Group from the right and do NOT try to split off a country code.
+
+  Guessing the dialling code from length gets Malaysian numbers right and
+  everything else wrong - a Singapore number came out as "+6 59-123 4567",
+  which reads as a different country entirely. Grouping from the right is
+  readable without asserting a boundary that would sometimes be a lie.
+  */
+  const tail = d.slice(-4);
+  const mid = d.slice(-7, -4);
+  const head = d.slice(0, -7);
+  return `+${[head, mid, tail].filter(Boolean).join(" ")}`;
+}
+
+/*
 Short, recognisable id text for someone with no known name.
 
 A full jid ("210977484189809@lid") is 20+ characters that mean nothing at a
@@ -263,6 +288,9 @@ function nameNode(m) {
   const known = nameOf(m);
   if (known) {
     frag.append(known + " ");
+  } else if (m.phoneNumber) {
+    // A number is not a name, but it is recognisable and pasteable into bind
+    frag.append(formatPhone(m.phoneNumber) + " ");
   } else {
     const span = document.createElement("span");
     span.className = "name-unknown";
@@ -278,7 +306,7 @@ function nameNode(m) {
 }
 
 /** Plain-text version of the name, for contexts that cannot hold markup. */
-const titleOf = (m) => nameOf(m) || `Unnamed (${shortId(m.userId)})`;
+const titleOf = (m) => nameOf(m) || formatPhone(m.phoneNumber) || `Unnamed (${shortId(m.userId)})`;
 
 const ago = (iso) => {
   if (!iso) return "never";
@@ -514,7 +542,7 @@ async function renderChats() {
 function personRow(m) {
   const el = document.createElement("button");
   el.className = "rowline";
-  el.appendChild(avatar(nameOf(m) || shortId(m.userId), m.userId));
+  el.appendChild(avatar(nameOf(m) || formatPhone(m.phoneNumber) || shortId(m.userId), m.userId));
 
   const main = document.createElement("div");
   main.className = "main";
@@ -554,7 +582,8 @@ function applyPeopleFilter(people) {
   if (f.registered === "no") out = out.filter(m => !m.studentId);
   if (f.spoken === "yes") out = out.filter(m => m.lastSpoke);
   if (f.spoken === "never") out = out.filter(m => !m.lastSpoke);
-  if (f.spoken === "unnamed") out = out.filter(m => !nameOf(m));
+  if (f.spoken === "unnamed") out = out.filter(m => !nameOf(m) && !m.phoneNumber);
+  if (f.spoken === "hasphone") out = out.filter(m => m.phoneNumber);
 
   out = out.slice().sort((a, b) => {
     if (f.sort === "chats") return b.chatCount - a.chatCount;
@@ -599,7 +628,8 @@ async function renderPeople() {
       { value: "all", label: "Everyone" },
       { value: "yes", label: "Has spoken" },
       { value: "never", label: "Never spoken" },
-      { value: "unnamed", label: "Unnamed" },
+      { value: "hasphone", label: "Has number" },
+      { value: "unnamed", label: "Unidentified" },
     ]},
   ], "peopleFilter", () => renderPeople());
   host.appendChild(bar);
@@ -689,7 +719,7 @@ async function openChat(c) {
     for (const m of members) {
       const el = document.createElement("button");
       el.className = "rowline";
-      el.appendChild(avatar(nameOf(m) || shortId(m.userId), m.userId));
+      el.appendChild(avatar(nameOf(m) || formatPhone(m.phoneNumber) || shortId(m.userId), m.userId));
       const main = document.createElement("div");
       main.className = "main";
       const t = document.createElement("div");
@@ -727,6 +757,7 @@ async function openPerson(m) {
   facts.style.cssText = "padding:12px 16px;font-size:13px;line-height:1.9";
   const rows = [
     ["Platform", m.transport],
+    ["Phone", m.phoneNumber ? formatPhone(m.phoneNumber) : "not resolved"],
     ["Student id", m.studentId ? (m.hidden ? m.studentId + " (hidden)" : m.studentId) : "not registered"],
     ["QR contributions", String(m.contributions)],
     ["Last spoke", m.lastSpoke ? ago(m.lastSpoke) : "never seen speaking"],
@@ -779,6 +810,8 @@ for (const t of document.querySelectorAll(".tab")) {
     current = t.dataset.page;
     for (const p of document.querySelectorAll(".page")) p.classList.remove("on");
     $("page-" + current).classList.add("on");
+    // The box searches whatever tab you are on, so say which
+    $("search").placeholder = current === "chats" ? "Search chats..." : "Search people...";
     $("search").placeholder = current === "chats" ? "Search chats..." : "Search people...";
     try { await render(current); } catch (e) { toast(e.message, true); }
   };
