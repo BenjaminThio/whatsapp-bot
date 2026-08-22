@@ -234,6 +234,8 @@ function pill(text, cls) {
 }
 const tpill = (t) => pill(t === "whatsapp" ? "WA" : "TG", t === "whatsapp" ? "wa" : "tg");
 const nameOf = (m) => m.displayName || m.studentId || null;
+/* The @handle, which WhatsApp and Telegram both expose separately from a name. */
+const handleOf = (m) => (m.username ? "@" + m.username : null);
 
 /*
 Format bare digits as a phone number.
@@ -288,6 +290,16 @@ function nameNode(m) {
   const known = nameOf(m);
   if (known) {
     frag.append(known + " ");
+    if (handleOf(m)) {
+      const h = document.createElement("span");
+      h.className = "id-hint";
+      h.textContent = handleOf(m);
+      frag.appendChild(h);
+      frag.append(" ");
+    }
+  } else if (handleOf(m)) {
+    // A handle identifies a person; prefer it over a bare number
+    frag.append(handleOf(m) + " ");
   } else if (m.phoneNumber) {
     // A number is not a name, but it is recognisable and pasteable into bind
     frag.append(formatPhone(m.phoneNumber) + " ");
@@ -306,7 +318,7 @@ function nameNode(m) {
 }
 
 /** Plain-text version of the name, for contexts that cannot hold markup. */
-const titleOf = (m) => nameOf(m) || formatPhone(m.phoneNumber) || `Unnamed (${shortId(m.userId)})`;
+const titleOf = (m) => nameOf(m) || handleOf(m) || formatPhone(m.phoneNumber) || `Unnamed (${shortId(m.userId)})`;
 
 const ago = (iso) => {
   if (!iso) return "never";
@@ -542,7 +554,7 @@ async function renderChats() {
 function personRow(m) {
   const el = document.createElement("button");
   el.className = "rowline";
-  el.appendChild(avatar(nameOf(m) || formatPhone(m.phoneNumber) || shortId(m.userId), m.userId));
+  el.appendChild(avatar(nameOf(m) || handleOf(m) || formatPhone(m.phoneNumber) || shortId(m.userId), m.userId));
 
   const main = document.createElement("div");
   main.className = "main";
@@ -582,8 +594,9 @@ function applyPeopleFilter(people) {
   if (f.registered === "no") out = out.filter(m => !m.studentId);
   if (f.spoken === "yes") out = out.filter(m => m.lastSpoke);
   if (f.spoken === "never") out = out.filter(m => !m.lastSpoke);
-  if (f.spoken === "unnamed") out = out.filter(m => !nameOf(m) && !m.phoneNumber);
+  if (f.spoken === "unnamed") out = out.filter(m => !nameOf(m) && !handleOf(m) && !m.phoneNumber);
   if (f.spoken === "hasphone") out = out.filter(m => m.phoneNumber);
+  if (f.spoken === "named") out = out.filter(m => nameOf(m) || handleOf(m));
 
   out = out.slice().sort((a, b) => {
     if (f.sort === "chats") return b.chatCount - a.chatCount;
@@ -628,6 +641,7 @@ async function renderPeople() {
       { value: "all", label: "Everyone" },
       { value: "yes", label: "Has spoken" },
       { value: "never", label: "Never spoken" },
+      { value: "named", label: "Has name" },
       { value: "hasphone", label: "Has number" },
       { value: "unnamed", label: "Unidentified" },
     ]},
@@ -719,7 +733,7 @@ async function openChat(c) {
     for (const m of members) {
       const el = document.createElement("button");
       el.className = "rowline";
-      el.appendChild(avatar(nameOf(m) || formatPhone(m.phoneNumber) || shortId(m.userId), m.userId));
+      el.appendChild(avatar(nameOf(m) || handleOf(m) || formatPhone(m.phoneNumber) || shortId(m.userId), m.userId));
       const main = document.createElement("div");
       main.className = "main";
       const t = document.createElement("div");
@@ -757,6 +771,7 @@ async function openPerson(m) {
   facts.style.cssText = "padding:12px 16px;font-size:13px;line-height:1.9";
   const rows = [
     ["Platform", m.transport],
+    ["Username", handleOf(m) ?? "none"],
     ["Phone", m.phoneNumber ? formatPhone(m.phoneNumber) : "not resolved"],
     ["Student id", m.studentId ? (m.hidden ? m.studentId + " (hidden)" : m.studentId) : "not registered"],
     ["QR contributions", String(m.contributions)],

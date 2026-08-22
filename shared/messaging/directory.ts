@@ -45,6 +45,8 @@ export interface MemberRow {
     userId: string;
     transport: string;
     displayName: string | null;
+    /** The @handle, when the platform exposes one. Separate from displayName. */
+    username: string | null;
     phoneNumber: string | null;
     isAdmin: boolean;
     firstSeen: string;
@@ -55,6 +57,7 @@ export interface MemberRow {
 export interface HarvestedMember {
     userId: string;
     displayName?: string | null;
+    username?: string | null;
     isAdmin?: boolean;
     /** Phone-number form of this account, when WhatsApp has revealed it. */
     phoneNumber?: string | null;
@@ -99,12 +102,14 @@ export async function replaceMembers(
         for (const m of members) {
             await trx`
                 INSERT INTO chat_members
-                    (chat_id, user_id, transport, display_name, phone_number,
+                    (chat_id, user_id, transport, display_name, username, phone_number,
                      is_admin, first_seen, last_seen)
                 VALUES (${chatId}, ${m.userId}, ${transport}, ${m.displayName ?? null},
-                        ${m.phoneNumber ?? null}, ${m.isAdmin ?? false}, now(), now())
+                        ${m.username ?? null}, ${m.phoneNumber ?? null},
+                        ${m.isAdmin ?? false}, now(), now())
                 ON CONFLICT (chat_id, user_id, transport) DO UPDATE SET
                     display_name = COALESCE(EXCLUDED.display_name, chat_members.display_name),
+                    username     = COALESCE(EXCLUDED.username, chat_members.username),
                     phone_number = COALESCE(EXCLUDED.phone_number, chat_members.phone_number),
                     is_admin     = EXCLUDED.is_admin,
                     last_seen    = now()
@@ -201,6 +206,19 @@ export async function renameMember(userId: string, transport: Transport, display
  * be resolved to a number long before anyone learns a name for it, and a name
  * can turn up for an account whose number is still unknown.
  */
+export async function setMemberUsername(userId: string, transport: Transport, username: string): Promise<void> {
+    await sql`
+        UPDATE chat_members SET username = ${username}
+         WHERE user_id = ${userId} AND transport = ${transport}
+           AND username IS DISTINCT FROM ${username}
+    `;
+    await sql`
+        UPDATE hi_hive SET username = ${username}
+         WHERE (jid = ${userId} OR doc_id = ${userId})
+           AND username IS DISTINCT FROM ${username}
+    `;
+}
+
 export async function setMemberPhone(userId: string, transport: Transport, phone: string): Promise<void> {
     await sql`
         UPDATE chat_members SET phone_number = ${phone}
@@ -385,6 +403,7 @@ function mapMember(r: any): MemberDetail {
         userId: r.user_id,
         transport: r.transport,
         displayName: r.display_name,
+        username: r.username ?? null,
         phoneNumber: r.phone_number ?? null,
         isAdmin: r.is_admin,
         firstSeen: r.first_seen,

@@ -24,8 +24,8 @@
 
 import type { WASocket } from "@whiskeysockets/baileys";
 import {
-    upsertChat, replaceMembers, renameMember, setMemberPhone, unresolvedLids,
-    type HarvestedMember,
+    upsertChat, replaceMembers, renameMember, setMemberPhone, setMemberUsername,
+    unresolvedLids, noteSpoke, type HarvestedMember,
 } from "../../../shared/messaging/directory.js";
 import { rememberIdentity, cleanName } from "../../../shared/hi-hive/identity.js";
 
@@ -169,7 +169,10 @@ function participantsOf(meta: any): HarvestedMember[] {
         if (!id) continue;
         out.push({
             userId: id,
-            displayName: cleanName(p?.name ?? p?.notify),
+            displayName: cleanName(p?.name ?? p?.notify ?? p?.verifiedName),
+            // The @handle is a separate field from the display name, and is
+            // often present when the name is not
+            username: cleanHandle(p?.username),
             /*
             A participant IS a Contact, so it may already carry the phone-number
             form alongside the lid. Free when present, and the only field here
@@ -184,6 +187,13 @@ function participantsOf(meta: any): HarvestedMember[] {
 }
 
 const isPhoneJid = (id: string): boolean => id.endsWith("@s.whatsapp.net");
+
+/** Strip a leading @ and validate. Null when there is nothing usable. */
+function cleanHandle(raw: string | null | undefined): string | null {
+    if (!raw) return null;
+    const h = String(raw).trim().replace(/^@+/, "");
+    return /^[A-Za-z0-9._-]{2,64}$/.test(h) ? h : null;
+}
 
 /**
  * Bare digits from a phone jid or raw number. Null when there is nothing usable.
@@ -250,7 +260,8 @@ the others when known. Writing the name to every id present is what lets a bare
 learns who that lid actually belongs to.
 */
 async function applyContactName(contact: any): Promise<void> {
-    const name = cleanName(contact?.name ?? contact?.notify);
+    const name = cleanName(contact?.name ?? contact?.notify ?? contact?.verifiedName);
+    const handle = cleanHandle(contact?.username);
     const phone = normalisePhone(contact?.phoneNumber ?? contact?.id);
 
     const ids = new Set<string>(
@@ -265,10 +276,52 @@ async function applyContactName(contact: any): Promise<void> {
             // contact's name is not grounds to create credentials for them
             void rememberIdentity(id, name);
         }
-        // A contact event often carries the number even when it carries no
-        // name, and the number alone already makes the row recognisable
+        // A contact event often carries the number or handle even when it
+        // carries no name, and either alone makes the row recognisable
+        if (handle) await setMemberUsername(id, "whatsapp", handle).catch(() => {});
         if (phone) await setMemberPhone(id, "whatsapp", phone).catch(() => {});
     }
+}
+
+/**
+ * Record the sender of any message the bot sees.
+ *
+ * This is the widest name source there is on WhatsApp. Every message in every
+ * group the bot is in arrives with `pushName` - the name that person chose for
+ * themselves - and with the sender's id. Nothing is requested and nothing is
+ * sent; the bot is simply in the room.
+ *
+ * It matters because the group member list does NOT carry names: a harvest
+ * gives ids, and this fills in who they are as people talk. Called for every
+ * message regardless of age or type, since a name is equally true whether the
+ * message was a command, an image, or something the bot ignores.
+ */
+export async function noteMessageSender(msg: any): Promise<void> {
+    const chatId: string | undefined = msg?.key?.remoteJid;
+    if (!chatId || chatId === "status@broadcast") return;
+
+    // In a group the individual is `participant`; in a DM the chat IS them
+    const isGroup = chatId.endsWith("@g.us");
+    const userId: string | undefined = isGroup ? msg?.key?.participant : chatId;
+    if (!userId) return;
+
+    // The bot's own messages say nothing useful about anyone else
+    if (msg?.key?.fromMe) return;
+
+    const name = cleanName(msg?.pushName);
+    if (!isGroup) {
+        // A DM is itself evidence of a chat the census does not otherwise see
+        await noteSpoke(chatId, userId, TRANSPORT, name).catch(() => {});
+        return;
+    }
+
+    /*
+    In a group, only touch a row that already exists - the harvest owns
+    membership there. Writing one here would resurrect someone who has left,
+    since replaceMembers() deletes exactly the rows a harvest did not report.
+    */
+    if (name) await renameMember(userId, TRANSPORT, name).catch(() => {});
+    void rememberIdentity(userId, name);
 }
 
 /**
@@ -310,6 +363,14 @@ export function startHarvester(sock: WASocket): void {
             if (n > 0) console.log(`📇 Resolved ${n} more phone number(s).`);
         });
     }, PHONE_RETRY_MS);
+
+    /*
+    Every message, from anyone, anywhere the bot can see. By far the widest
+    source of names - see noteMessageSender().
+    */
+    sock.ev.on("messages.upsert", ({ messages }: any) => {
+        for (const m of messages ?? []) void noteMessageSender(m);
+    });
 
     // Names arriving over time - see applyContactName() for why this matters
     sock.ev.on("contacts.upsert", (contacts: any[]) => {
