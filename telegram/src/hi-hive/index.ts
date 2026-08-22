@@ -34,9 +34,10 @@ import {
     resolveDocId as resolveDocIdShared, resolveOwnDocId,
 } from "../../../shared/hi-hive/creds.js";
 import {
-    addWhitelist, removeWhitelist, listWhitelist, getRankings,
-    enqueueBatch, newId as newBufferId, incrementContribution,
+    addWhitelist, removeWhitelist, listWhitelist,
+    enqueueBatch, newId as newBufferId,
 } from "../../../shared/hi-hive/scan-buffer-db.js";
+import { creditContribution, getLeaderboard, leaderLabel } from "../../../shared/hi-hive/contributions.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
 import {
     bindToExisting, bindNew, unbind, bindingsFor, formatBindings, parseBool,
@@ -659,7 +660,8 @@ const hihive = cmd("hihive", {
         case "ranks":
         case "leaderboard":
         case "lb": {
-            const rows = await getRankings(25);
+            // Registered and unregistered contributors, merged
+            const rows = await getLeaderboard(25);
             if (rows.length === 0) { await ctx.reply("📭 No QR contributions recorded yet."); return; }
 
             const total = rows.reduce((sum, r) => sum + r.contributions, 0);
@@ -669,10 +671,10 @@ const hihive = cmd("hihive", {
                 "🏆 QR contribution ranking\n" +
                 "Who supplies the QR codes everyone scans.\n\n" +
                 rows.map((r, i) => {
-                    // Prefer the chat name we have seen; fall back to the student id
-                    const name = rankLabel(r);
+                    const name = leaderLabel(r);
+                    const tag = r.registered ? "" : " (guest)";
                     const share = ((r.contributions / total) * 100).toFixed(0);
-                    return `${medal(i)} ${name} - ${r.contributions} QR${r.contributions === 1 ? "" : "s"} (${share}%)`;
+                    return `${medal(i)} ${name}${tag} - ${r.contributions} QR${r.contributions === 1 ? "" : "s"} (${share}%)`;
                 }).join("\n") +
                 `\n\n📊 ${total} contributed by ${rows.length} student${rows.length === 1 ? "" : "s"}.`
             );
@@ -735,10 +737,18 @@ autoScan.on("message:photo", async (tgCtx) => {
         });
 
         const scannedBy = await labelFor(String(tgCtx.from.id));
-        const docId = (await exists(String(tgCtx.from.id))) ? String(tgCtx.from.id) : null;
-        if (docId) {
-            try { await incrementContribution(docId); }
-            catch (e) { console.error("[autoScan] contribution credit failed:", e); }
+
+        /*
+        Credit regardless of registration - creditContribution routes it to
+        hi_hive or to the contributors ledger. Same rule as the WhatsApp side.
+        */
+        try {
+            await creditContribution(String(tgCtx.from.id), "telegram", {
+                displayName: tgCtx.from.first_name ?? null,
+                username: tgCtx.from.username ?? null,
+            });
+        } catch (e) {
+            console.error("[autoScan] contribution credit failed:", e);
         }
 
         const destinations: Destination[] = [

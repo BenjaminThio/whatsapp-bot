@@ -225,7 +225,7 @@ export async function resolveScannedBy(
   sock: WASocket,
   msg: WAMessage,
   chatId: string
-): Promise<{ label: string; docId: string | null }> {
+): Promise<{ label: string; docId: string | null; senderJid: string | null; pushName: string | null }> {
   const isGroup = chatId.endsWith("@g.us");
   const ownId   = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
   const ownLid  = (sock.user as any)?.lid ? jidNormalizedUser((sock.user as any).lid) : null;
@@ -256,12 +256,25 @@ export async function resolveScannedBy(
       return {
         label: hit.creds.hidden ? "Hidden User" : hit.creds.id,
         docId: hit.docId,
+        senderJid,
+        pushName: msg.pushName ?? null,
       };
     }
   }
 
-  console.log(`[reportTargets] scanned by UNKNOWN — tried: ${candidates.filter(Boolean).join(", ")}`);
-  return { label: "Unknown User", docId: null };
+  /*
+  No credentials, but we still know WHO sent it. The jid and pushName are
+  returned so the caller can credit the contribution against the account
+  itself - not registering is not a reason to lose the credit.
+  */
+  console.log(`[reportTargets] scanned by UNREGISTERED — tried: ${candidates.filter(Boolean).join(", ")}`);
+  const pushName = msg.pushName ?? null;
+  return {
+    label: pushName ?? "Unknown User",
+    docId: null,
+    senderJid,
+    pushName,
+  };
 }
 
 

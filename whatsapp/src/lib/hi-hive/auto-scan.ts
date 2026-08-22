@@ -12,7 +12,8 @@ import { WAMessage, WASocket } from "@whiskeysockets/baileys";
 import { getAllDocs } from "../../../../shared/hi-hive/creds.js";
 import { formatWaitingNoticeGrouped, randomDelaySec } from "../../../../shared/hi-hive/scan-buffer.js";
 import { alreadyProcessed, queueText, reactNow } from "../outbox.js";
-import { enqueueBatch, newId as newBufferId, incrementContribution } from "../../../../shared/hi-hive/scan-buffer-db.js";
+import { enqueueBatch, newId as newBufferId } from "../../../../shared/hi-hive/scan-buffer-db.js";
+import { creditContribution } from "../../../../shared/hi-hive/contributions.js";
 import { resolveDestinations, includesStudent, resolveScannedBy, scannedByHeader } from "./report-targets.js";
 import { decodeQr } from "../../../../shared/hi-hive/legacy/decode-qr.js";
 import { findImage, isMediaReady, downloadMedia, formatBytes } from "../media.js";
@@ -115,11 +116,21 @@ export async function tryAutoScan(sock: WASocket, msg: WAMessage): Promise<boole
 
     // Who supplied this QR? Used for the header and the contribution ranking.
     const scannedBy = await resolveScannedBy(sock, msg, chatId);
-    if (scannedBy.docId) {
-      try { await incrementContribution(scannedBy.docId); }
-      catch (e) { console.error("[autoScan] contribution credit failed:", e); }
+
+    /*
+    Credit the contribution whether or not they are registered. creditContribution
+    decides where it lands: hi_hive for an account it can resolve, the
+    contributors ledger otherwise. Supplying QRs is the useful act; having run
+    `!test set` is not a precondition for being counted.
+    */
+    try {
+      const where = await creditContribution(scannedBy.senderJid, "whatsapp", {
+        displayName: scannedBy.pushName,
+      });
+      console.log(`[autoScan] scanned by ${scannedBy.label} (${where})`);
+    } catch (e) {
+      console.error("[autoScan] contribution credit failed:", e);
     }
-    console.log(`[autoScan] scanned by ${scannedBy.label} (${scannedBy.docId ?? "unregistered"})`);
 
     // Non-whitelisted group with no reportSettings rule: scan silently and just
     // thank the sender with a ❤️ instead of the usual ⏳/✅ flow.

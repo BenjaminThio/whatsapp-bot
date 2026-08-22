@@ -4,7 +4,8 @@ import { addAnonymousCreds, deleteCreds, exists, getAnonymousDocIds, getRelatedD
 import { handleScanAttendance } from "./scan.js";
 import { sendAttendanceReport } from "./attendance.js";
 import { decryptData, generateEncryptedData } from "../../../shared/hi-hive/scan-qr.js";
-import { addWhitelist, removeWhitelist, listWhitelist, getRankings } from "../../../shared/hi-hive/scan-buffer-db.js";
+import { addWhitelist, removeWhitelist, listWhitelist } from "../../../shared/hi-hive/scan-buffer-db.js";
+import { getLeaderboard, leaderLabel } from "../../../shared/hi-hive/contributions.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
 import { renderTimetablePng } from "../../../shared/hi-hive/visualise.js";
 import { cmd } from "../config/prefixes.js";
@@ -663,7 +664,8 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
                 case 'leaderboard':
                 case 'lb':
                 {
-                    const rows = await getRankings(25);
+                    // Registered and unregistered contributors, merged
+                    const rows = await getLeaderboard(25);
 
                     if (rows.length === 0)
                     {
@@ -677,16 +679,18 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
                     const total: number = rows.reduce((sum, r) => sum + r.contributions, 0);
 
                     const lines: string[] = rows.map((r, i) => {
-                        // Prefer the chat name we have seen; fall back to the student id
-                        const name: string = rankLabel(r);
+                        const name: string = leaderLabel(r);
+                        // Mark people who have not registered, so the list is
+                        // honest about who the bot has credentials for
+                        const tag: string = r.registered ? '' : ' _(guest)_';
                         const share: string = ((r.contributions / total) * 100).toFixed(0);
-                        return `${medal(i)} \`${name}\` — *${r.contributions}* QR${r.contributions === 1 ? '' : 's'} _(${share}%)_`;
+                        return `${medal(i)} \`${name}\`${tag} — *${r.contributions}* QR${r.contributions === 1 ? '' : 's'} _(${share}%)_`;
                     });
 
                     say(
                         `🏆 *QR CONTRIBUTION RANKING*\n_Who supplies the QR codes everyone scans._\n\n` +
                         `${lines.join('\n')}\n\n` +
-                        `📊 ${total} QR${total === 1 ? '' : 's'} contributed by ${rows.length} student${rows.length === 1 ? '' : 's'}.`
+                        `📊 ${total} QR${total === 1 ? '' : 's'} contributed by ${rows.length} ${rows.length === 1 ? 'person' : 'people'}.`
                     );
                     break;
                 }

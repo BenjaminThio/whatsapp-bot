@@ -23,6 +23,7 @@ import {
   aliasesForDoc, resolveDocId, claimDoc, type Alias,
 } from "./creds.js";
 import { setDocIdentity } from "./identity.js";
+import { mergeContributions } from "./contributions.js";
 import type { Creds } from "./types.js";
 
 export type Transport = "whatsapp" | "telegram";
@@ -95,12 +96,24 @@ export async function bindToExisting(
   */
   const wasOwnedBy = await claimDoc(docId);
 
+  /*
+  Anything they contributed before registering follows them in. Without this,
+  binding would reset an active contributor's tally to whatever the account
+  already had - which for a new doc is zero.
+  */
+  const carried = await mergeContributions(target, docId);
+
   // The jid is known for certain here, unlike the passive capture that waits
   // for someone to speak
   await setDocIdentity(docId, target, displayName);
 
   const creds = await loadCreds(docId);
   const who = creds ? (creds.hidden ? "*".repeat(creds.id.length) : creds.id) : docId;
+
+  const carriedNote = carried > 0
+    ? `
+🏆 Brought ${carried} earlier contribution${carried === 1 ? "" : "s"} across.`
+    : "";
 
   const claimed = wasOwnedBy
     ? `
@@ -113,7 +126,7 @@ export async function bindToExisting(
     created: false,
     message: (previous && previous !== docId
       ? `🔗 Rebound \`${target}\` from \`${previous}\` to \`${who}\`.`
-      : `🔗 Bound \`${target}\` to \`${who}\`.`) + claimed,
+      : `🔗 Bound \`${target}\` to \`${who}\`.`) + claimed + carriedNote,
   };
 }
 
@@ -168,6 +181,7 @@ export async function bindNew(
   await saveCreds(id, creds);          // doc id IS the student id
   await bindAlias(target, id, transport, boundBy);
   await setDocIdentity(id, target, displayName);
+  const carried = await mergeContributions(target, id);
 
   const moved = previous && previous !== id
     ? `\n⚠️ Moved from \`${previous}\`, which they were bound to before.`
@@ -181,7 +195,9 @@ export async function bindNew(
       `${already ? "🔗 Bound" : "✅ Created and bound"} \`${target}\`\n` +
       `🫆 Student ID: \`${id}\`\n` +
       `📧 Email: \`${mail}\`\n` +
-      `🙈 Hidden: \`${hidden ?? false}\`${moved}`,
+      `🙈 Hidden: \`${hidden ?? false}\`${moved}` +
+      (carried > 0 ? `
+🏆 Brought ${carried} earlier contribution${carried === 1 ? "" : "s"} across.` : ""),
   };
 }
 

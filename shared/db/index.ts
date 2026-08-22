@@ -59,6 +59,7 @@ const SCHEMA_FILES = [
   "directory-schema.sql",
   "directory-phone.sql",
   "directory-username.sql",
+  "contributors-schema.sql",
 ];
 
 let ensured = false;

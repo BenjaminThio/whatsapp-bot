@@ -137,40 +137,15 @@ export async function listWhitelist(): Promise<{ jid: string; addedBy: string | 
 }
 
 
-// ─── QR contribution ranking ──────────────────────────────────────────────────
+/*
+QR contribution ranking moved to hi-hive/contributions.ts.
 
-/** Credit one QR contribution to the account behind `docId`. */
-export async function incrementContribution(docId: string): Promise<void> {
-  await sql`
-    UPDATE hi_hive SET contributions = contributions + 1 WHERE doc_id = ${docId}
-  `;
-}
-
-export interface RankRow {
-  studentId:     string;
-  hidden:        boolean;
-  contributions: number;
-  /** Chat display name, when one has been seen. Null for docs nobody has spoken from. */
-  displayName:   string | null;
-}
-
-/** Leaderboard, highest contributor first. */
-export async function getRankings(limit = 25): Promise<RankRow[]> {
-  const rows = await sql`
-    SELECT student_id, hidden, contributions, display_name
-    FROM hi_hive
-    WHERE contributions > 0
-    ORDER BY contributions DESC, student_id ASC
-    LIMIT ${limit}
-  `;
-  return rows.map((r: any) => ({
-    studentId:     r.student_id,
-    hidden:        r.hidden,
-    contributions: Number(r.contributions),
-    displayName:   r.display_name ?? null,
-  }));
-}
-
+It used to live here as incrementContribution() + getRankings(), both of which
+only knew about hi_hive - so a contribution from someone without an account was
+dropped and never appeared on any leaderboard. The replacement routes credit to
+hi_hive or to the contributors ledger depending on whether the account resolves,
+and the leaderboard unions the two.
+*/
 
 /**
  * Atomically claim the right to send this batch's report.
