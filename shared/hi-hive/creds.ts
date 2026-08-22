@@ -165,9 +165,21 @@ export async function getAnonymousDocIds(userId: string): Promise<string[]> {
 
 /** Doc ids whose student_id OR email match the given value (was Filter.or). */
 export async function getRelatedDocIds(id: string): Promise<string[]> {
+  /*
+  Username and phone join the match on purpose. WhatsApp's newer privacy
+  setting hides a person's number from anyone who is not a saved contact and
+  shows only their @handle in its place, so for a fair number of people the
+  handle - or a number someone else copied off their profile before it was
+  hidden - is the only thing there is to type into `!test bind`, `!test info`,
+  and everything else that resolves a typed id through this function.
+  */
+  const phone = id.replace(/\D/g, "");
+  const handle = id.replace(/^@/, "");
   const rows = await sql<{ doc_id: string }[]>`
     SELECT doc_id FROM hi_hive
     WHERE student_id = ${id} OR email = ${id}
+       OR (${phone} <> '' AND phone_number = ${phone})
+       OR (${handle} <> '' AND username = ${handle})
   `;
   return rows.map(r => r.doc_id);
 }

@@ -5,7 +5,9 @@ import { handleScanAttendance } from "./scan.js";
 import { sendAttendanceReport } from "./attendance.js";
 import { decryptData, generateEncryptedData } from "../../../shared/hi-hive/scan-qr.js";
 import { addWhitelist, removeWhitelist, listWhitelist } from "../../../shared/hi-hive/scan-buffer-db.js";
-import { getLeaderboard, leaderLabel } from "../../../shared/hi-hive/contributions.js";
+import {
+    getLeaderboard, leaderLabel, resolveCreditTarget, adjustContribution,
+} from "../../../shared/hi-hive/contributions.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
 import { renderTimetablePng } from "../../../shared/hi-hive/visualise.js";
 import { cmd } from "../config/prefixes.js";
@@ -26,7 +28,7 @@ export interface Creds
     ownerId?: string;
 }
 
-const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v', 'rank', 'ranks', 'leaderboard', 'lb', 'bind'] as const;
+const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v', 'rank', 'ranks', 'leaderboard', 'lb', 'bind', 'credit'] as const;
 type Subcommand = typeof SUBCOMMANDS[number];
 const ID_REGEX: RegExp = /^\d{7}$/;
 const EMAIL_REGEX: RegExp = /^[a-zA-Z0-9._%+-]+@1utar\.my$/i;
@@ -66,6 +68,13 @@ const FORMATS = {
     isolated:   [`${T} <isolated | iso> [Student ID | Doc ID]`],
     visualise:  [`${T} <visualise | vis | v> [Student ID | Doc ID]`],
     rank:       [`${T} <rank | leaderboard | lb>`],
+    credit:     [
+        `${T} credit <Target> <Amount>`,
+        `${T} credit <Target> +<Amount>`,
+        `${T} credit <Target> -<Amount>`,
+        `_(reply to them)_ ${T} credit <Amount | +N | -N>`,
+        `${T} credit list`,
+    ],
     bind:       [
         `${T} bind <User JID> <Student ID> <Utar Email> [isHidden (true/false)]`,
         `${T} bind <User JID> <Creds Doc Ref ID | Student ID | Email>`,
@@ -350,6 +359,79 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
 
                 Quote their message and the jid can be left out entirely.
                 */
+                /*
+                credit - fix a contribution total by hand.
+
+                Counting only started when the feature shipped, so everything
+                supplied before that is missing, and guests had no row at all.
+
+                  `12`  sets the total to 12
+                  `+5`  adds five
+                  `-2`  removes two
+
+                Works on registered students and guests alike; a guest with no
+                ledger entry gets one created, with whatever name and number the
+                directory already knows about them.
+                */
+                case 'credit':
+                {
+                    if (params[1] === 'list')
+                    {
+                        const rows = await getLeaderboard(50);
+                        if (rows.length === 0) { say('📭 Nobody has any contributions recorded.'); break; }
+                        say(
+                            [
+                                '📋 *Contribution Totals*',
+                                '',
+                                ...rows.map(r =>
+                                    `• \`${leaderLabel(r)}\`${r.registered ? '' : ' _(guest)_'} — *${r.contributions}*`),
+                            ].join('\n')
+                        );
+                        break;
+                    }
+
+                    // Quoting makes the target implicit, so the amount shifts down
+                    const quoted: string | null = ctx.quotedSender;
+                    const targetText: string | undefined = quoted ?? params[1];
+                    const amountText: string | undefined = quoted ? params[1] : params[2];
+
+                    if (!targetText || !amountText) { say(formatsFor('credit')); break; }
+
+                    // A leading + or - means adjust; a bare number means set
+                    const relative = /^[+-]/.test(amountText);
+                    const parsed = Number(amountText);
+                    if (!Number.isFinite(parsed)) {
+                        say(`❌ \`${amountText}\` is not a number.
+
+${formatsFor('credit')}`);
+                        break;
+                    }
+
+                    const target = await resolveCreditTarget(targetText);
+                    if (!target) {
+                        say(
+                            `❌ Could not find anyone matching \`${targetText}\`.
+` +
+                            `Try their JID, phone number, student ID, or reply to their message.`
+                        );
+                        break;
+                    }
+
+                    const result = await adjustContribution(
+                        target, 'whatsapp',
+                        relative ? { delta: parsed } : { value: parsed }
+                    );
+
+                    say(
+                        [
+                            '🏆 *Contributions Updated*',
+                            `👤 \`${result.label}\`${result.registered ? '' : ' _(guest)_'}`,
+                            `📊 ${result.before} → *${result.after}*`,
+                            ...(result.created ? ['_New guest entry created._'] : []),
+                        ].join('\n')
+                    );
+                    break;
+                }
                 case 'bind':
                 {
                     const first: string | undefined = params[1];

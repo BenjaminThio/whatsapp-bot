@@ -37,7 +37,10 @@ import {
     addWhitelist, removeWhitelist, listWhitelist,
     enqueueBatch, newId as newBufferId,
 } from "../../../shared/hi-hive/scan-buffer-db.js";
-import { creditContribution, getLeaderboard, leaderLabel } from "../../../shared/hi-hive/contributions.js";
+import {
+    creditContribution, getLeaderboard, leaderLabel,
+    resolveCreditTarget, adjustContribution,
+} from "../../../shared/hi-hive/contributions.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
 import {
     bindToExisting, bindNew, unbind, bindingsFor, formatBindings, parseBool,
@@ -502,6 +505,72 @@ const hihive = cmd("hihive", {
 
         Reply to their message and the id can be left out entirely.
         */
+        /*
+        credit - fix a contribution total by hand.
+
+        Counting only started when the feature shipped, so anything supplied
+        before that is missing, and guests had no ledger row at all.
+
+          12   sets the total to 12
+          +5   adds five
+          -2   removes two
+
+        Reply to someone to skip the target argument.
+        */
+        case "credit": {
+            if (ctx.arg(1) === "list") {
+                const rows = await getLeaderboard(50);
+                if (rows.length === 0) { await ctx.reply("No contributions recorded."); return; }
+                await ctx.reply(
+                    ["Contribution totals", ""].concat(
+                        rows.map(r => `- ${leaderLabel(r)}${r.registered ? "" : " (guest)"}: ${r.contributions}`)
+                    ).join("\n")
+                );
+                return;
+            }
+
+            const replying = ctx.replyToUserId !== undefined;
+            const targetText = replying ? String(ctx.replyToUserId) : ctx.arg(1);
+            const amountText = replying ? ctx.arg(1) : ctx.arg(2);
+
+            if (!targetText || !amountText) {
+                await ctx.reply([
+                    "Usage:",
+                    "  /hihive credit <target> <amount>     set the total",
+                    "  /hihive credit <target> +5           add",
+                    "  /hihive credit <target> -2           subtract",
+                    "  /hihive credit list                  show everyone",
+                    "",
+                    "Target: user id, phone number, student id, or reply to them.",
+                ].join("\n"));
+                return;
+            }
+
+            const relative = /^[+-]/.test(amountText);
+            const parsed = Number(amountText);
+            if (!Number.isFinite(parsed)) {
+                await ctx.reply(`${amountText} is not a number.`);
+                return;
+            }
+
+            const target = await resolveCreditTarget(targetText);
+            if (!target) {
+                await ctx.reply(`Could not find anyone matching ${targetText}.`);
+                return;
+            }
+
+            const result = await adjustContribution(
+                target, "telegram", relative ? { delta: parsed } : { value: parsed });
+
+            await ctx.reply([
+                "Contributions updated",
+                `${result.label}${result.registered ? "" : " (guest)"}`,
+                `${result.before} -> ${result.after}`,
+                ...(result.created ? ["New guest entry created."] : []),
+            ].join("\n"));
+            return;
+        }
+
         case "bind": {
             const first = ctx.arg(1);
 
