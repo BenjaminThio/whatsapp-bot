@@ -21,6 +21,7 @@
 
 import sql from "../db/index.js";
 import { resolveOwnDocId, exists, invalidateCredsCache } from "./creds.js";
+import { cleanName } from "./identity.js";
 
 export type Transport = "whatsapp" | "telegram";
 
@@ -360,5 +361,63 @@ export async function adjustContribution(
     return {
         label: target.label, before, after,
         registered: false, created: existing === undefined,
+    };
+}
+
+// ── Pre-registering a guest ───────────────────────────────────────────────────
+/*
+A guest row is normally created reactively - the first time someone with no
+account scans a QR, or when `credit` back-fills them from the census. Neither
+helps for someone the bot has never seen at all: a new group member you already
+know by jid but who has not spoken or contributed yet.
+
+createGuest() is the explicit version of the same thing `!test add` does for
+real credentials, aimed at the contributors ledger instead: give it a jid and a
+name, get a row that future contributions land on and `bind` can later attach
+real credentials to - deliberately with no student id or email, because a guest
+has not provided any.
+*/
+
+export interface GuestResult {
+    ok: boolean;
+    message: string;
+    created?: boolean;
+}
+
+export async function createGuest(
+    userId: string, transport: Transport, displayName: string
+): Promise<GuestResult> {
+    const id = userId.trim();
+    if (!id) return { ok: false, message: "No jid given." };
+
+    const name = cleanName(displayName);
+    if (!name) return { ok: false, message: "Give them a name - it is what the leaderboard will show." };
+
+    // Someone with real credentials is not a guest, whether directly or via a
+    // bind alias - creating a shadow entry here would just split their tally
+    const docId = await resolveOwnDocId(id);
+    if (await exists(docId)) {
+        return {
+            ok: false,
+            message: `\`${id}\` already has registered credentials - use \`bind\` or \`credit\` instead.`,
+        };
+    }
+
+    const rows = await sql<{ contributions: number; created: boolean }[]>`
+        INSERT INTO contributors
+            (user_id, transport, display_name, contributions, first_contributed, last_contributed)
+        VALUES (${id}, ${transport}, ${name}, 0, now(), now())
+        ON CONFLICT (user_id, transport) DO UPDATE SET
+            display_name = ${name}
+        RETURNING contributions, (xmax = 0) AS created
+    `;
+
+    const row = rows[0]!;
+    return {
+        ok: true,
+        created: row.created,
+        message: row.created
+            ? `👤 Guest created\n🆔 \`${id}\`\n📛 ${name}\n📊 0 QR so far - counted automatically from their next contribution.`
+            : `👤 Guest renamed to ${name}\n🆔 \`${id}\`\n📊 ${row.contributions} QR already on record.`,
     };
 }

@@ -39,7 +39,7 @@ import {
 } from "../../../shared/hi-hive/scan-buffer-db.js";
 import {
     creditContribution, getLeaderboard, leaderLabel,
-    resolveCreditTarget, adjustContribution,
+    resolveCreditTarget, adjustContribution, createGuest,
 } from "../../../shared/hi-hive/contributions.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
 import {
@@ -517,6 +517,38 @@ const hihive = cmd("hihive", {
 
         Reply to someone to skip the target argument.
         */
+        /*
+        guest - pre-register someone with no credentials at all.
+
+        "set/add" creates a real (if anonymous) hi_hive doc, which needs a
+        student id and email because it IS credentials. This is for someone who
+        has not given any and may never - a new member, a guest presenter -
+        who you still want counted and shown on the leaderboard. Just an id and
+        a name.
+
+        Their next contribution lands on this row automatically; `bind` later
+        folds it into real credentials if they do register.
+        */
+        case "guest": {
+            const replying = ctx.replyToUserId !== undefined;
+            const target = replying ? String(ctx.replyToUserId) : ctx.arg(1);
+            const name = replying ? ctx.rest(1) : ctx.rest(2);
+
+            if (!target || !name) {
+                await ctx.reply(
+                    [
+                        "Usage:",
+                        "  /hihive guest <userId> <display name>",
+                        "  (reply to them) /hihive guest <display name>",
+                    ].join("\n")
+                );
+                return;
+            }
+
+            await ctx.reply((await createGuest(target, "telegram", name)).message);
+            return;
+        }
+
         case "credit": {
             if (ctx.arg(1) === "list") {
                 const rows = await getLeaderboard(50);

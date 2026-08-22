@@ -6,7 +6,7 @@ import { sendAttendanceReport } from "./attendance.js";
 import { decryptData, generateEncryptedData } from "../../../shared/hi-hive/scan-qr.js";
 import { addWhitelist, removeWhitelist, listWhitelist } from "../../../shared/hi-hive/scan-buffer-db.js";
 import {
-    getLeaderboard, leaderLabel, resolveCreditTarget, adjustContribution,
+    getLeaderboard, leaderLabel, resolveCreditTarget, adjustContribution, createGuest,
 } from "../../../shared/hi-hive/contributions.js";
 import { findIsolatedSessions, formatIsolated, slotsForDoc } from "../../../shared/hi-hive/timetable.js";
 import { renderTimetablePng } from "../../../shared/hi-hive/visualise.js";
@@ -28,7 +28,7 @@ export interface Creds
     ownerId?: string;
 }
 
-const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v', 'rank', 'ranks', 'leaderboard', 'lb', 'bind', 'credit'] as const;
+const SUBCOMMANDS = ['scan', 'scn', 'sc', 'attendance', 'att', 'info', 'i', 'add', 'set', 'delete', 'del', 'd', 'list', 'l', 'help', 'h', 'token', 't', 'decrypt', 'whitelist', 'wl', 'isolated', 'iso', 'visualise', 'visualize', 'vis', 'v', 'rank', 'ranks', 'leaderboard', 'lb', 'bind', 'credit', 'guest'] as const;
 type Subcommand = typeof SUBCOMMANDS[number];
 const ID_REGEX: RegExp = /^\d{7}$/;
 const EMAIL_REGEX: RegExp = /^[a-zA-Z0-9._%+-]+@1utar\.my$/i;
@@ -74,6 +74,10 @@ const FORMATS = {
         `${T} credit <Target> -<Amount>`,
         `_(reply to them)_ ${T} credit <Amount | +N | -N>`,
         `${T} credit list`,
+    ],
+    guest:      [
+        `${T} guest <User JID> <Display Name>`,
+        `_(reply to them)_ ${T} guest <Display Name>`,
     ],
     bind:       [
         `${T} bind <User JID> <Student ID> <Utar Email> [isHidden (true/false)]`,
@@ -373,6 +377,34 @@ async function handleTest(sock: WASocket, msg: WAMessage, _text: string, ctx: Co
                 ledger entry gets one created, with whatever name and number the
                 directory already knows about them.
                 */
+                /*
+                guest - pre-register someone with no credentials at all.
+
+                `add` creates a real (if anonymous) hi_hive doc: a student id and
+                an email are required because it IS credentials, just entered by
+                someone else. This is for the opposite case - a person you want
+                on the leaderboard who has not given any credentials and may
+                never - a new group member, a guest presenter, whoever. Only a
+                jid and a name; no id, no email.
+
+                Contributions land on this row automatically from their next scan
+                (creditContribution already resolves an unknown jid to whatever
+                guest row exists for it, or creates one if none does - this
+                command just gets a name attached before the first QR arrives).
+                Should they register properly later, `bind` folds this tally into
+                their real credentials and removes this row.
+                */
+                case 'guest':
+                {
+                    const quoted: string | null = ctx.quotedSender;
+                    const target: string | undefined = quoted ?? params[1];
+                    const name: string = (quoted ? params.slice(1) : params.slice(2)).join(' ');
+
+                    if (!target || !name) { say(formatsFor('guest')); break; }
+
+                    say((await createGuest(target, 'whatsapp', name)).message);
+                    break;
+                }
                 case 'credit':
                 {
                     if (params[1] === 'list')
